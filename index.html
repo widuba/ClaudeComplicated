@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Grand Dominion</title>
+  <title>The Republic</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -16,18 +16,18 @@
     <div class="setup-bg"></div>
     <div class="setup-container">
       <div class="setup-header">
-        <h1 class="game-title">GRAND DOMINION</h1>
-        <p class="game-subtitle">Empire · Diplomacy · Betrayal</p>
+        <h1 class="game-title">THE REPUBLIC</h1>
+        <p class="game-subtitle">Power · Dark Money · Betrayal</p>
         <div class="title-divider"></div>
         <p class="game-desc">
-          A deterministic grand strategy game of pure skill.<br>
-          Build your empire, forge alliances — then betray them at the perfect moment.
+          A political strategy game of pure skill and psychological warfare.<br>
+          Build your faction, forge coalitions — then betray them when the moment is right.
         </p>
       </div>
 
       <div class="setup-body">
         <div class="setup-section">
-          <label class="setup-label">Number of Players</label>
+          <label class="setup-label">Number of Factions</label>
           <div class="btn-group" id="player-count-group">
             <button class="btn-player-count" data-count="3">3</button>
             <button class="btn-player-count active" data-count="4">4</button>
@@ -37,22 +37,22 @@
         </div>
 
         <div class="setup-section">
-          <label class="setup-label">Configure Players</label>
+          <label class="setup-label">Configure Factions</label>
           <div id="player-list"></div>
         </div>
 
         <div class="setup-section rules-section">
           <label class="setup-label">Victory Conditions</label>
           <div class="rules-grid">
-            <div class="rule-card"><span class="rule-icon">⚔</span><b>Military</b><br>Control 55% of territories</div>
-            <div class="rule-card"><span class="rule-icon">💰</span><b>Economic</b><br>400+ Gold &amp; 2+ cities</div>
-            <div class="rule-card"><span class="rule-icon">📚</span><b>Knowledge</b><br>Research 8+ technologies</div>
-            <div class="rule-card"><span class="rule-icon">⚜</span><b>Diplomatic</b><br>Lead an alliance majority</div>
+            <div class="rule-card"><span class="rule-icon">🗳</span><b>Electoral</b><br>Reach 270 Electoral Votes</div>
+            <div class="rule-card"><span class="rule-icon">💰</span><b>Economic</b><br>Hoard 500+ Funds &amp; 3+ states</div>
+            <div class="rule-card"><span class="rule-icon">📋</span><b>Policy</b><br>Pass 8+ policies into law</div>
+            <div class="rule-card"><span class="rule-icon">⚡</span><b>Elimination</b><br>Last faction controlling territory</div>
           </div>
         </div>
       </div>
 
-      <button id="btn-start-game" class="btn-start">Begin Conquest</button>
+      <button id="btn-start-game" class="btn-start">Launch Campaign</button>
     </div>
   </div>
 
@@ -81,35 +81,37 @@
       <!-- LEFT PANEL -->
       <div id="left-panel">
         <div id="current-player-box">
-          <div id="current-player-name" class="cp-name">Player</div>
+          <div id="current-player-name" class="cp-name">Faction</div>
           <div id="player-type-badge" class="cp-badge">👤 Human</div>
         </div>
 
         <div id="resources-panel">
-          <div class="res-row" id="res-gold">💰 —</div>
-          <div class="res-row" id="res-food">🌾 —</div>
-          <div class="res-row" id="res-iron">⚙ —</div>
-          <div class="res-row" id="res-knowledge">📚 —</div>
+          <div class="res-row" id="res-funds">💰 —</div>
+          <div class="res-row" id="res-media">📺 —</div>
+          <div class="res-row" id="res-ground">🤝 —</div>
+          <div class="res-row" id="res-capital">🔮 —</div>
         </div>
 
         <div id="stats-panel">
-          <div class="stat-entry"><span class="stat-label">🗺 Territories</span><span id="stat-territories" class="stat-val">—</span></div>
-          <div class="stat-entry"><span class="stat-label">⚔ Units</span><span id="stat-units" class="stat-val">—</span></div>
-          <div class="stat-entry"><span class="stat-label">📚 Techs</span><span id="stat-techs" class="stat-val">—</span></div>
+          <div class="stat-entry"><span class="stat-label">🗳 Elec. Votes</span><span id="stat-ev" class="stat-val">—</span></div>
+          <div class="stat-entry"><span class="stat-label">🗺 States</span><span id="stat-states" class="stat-val">—</span></div>
+          <div class="stat-entry"><span class="stat-label">🕴 Operations</span><span id="stat-ops" class="stat-val">—</span></div>
+          <div class="stat-entry"><span class="stat-label">📋 Policies</span><span id="stat-policies" class="stat-val">—</span></div>
           <div class="stat-entry"><span class="stat-label">🌟 Reputation</span><span id="stat-rep" class="stat-val">—</span></div>
+          <div class="stat-entry"><span class="stat-label">⚠ Exposure</span><span id="stat-exposure" class="stat-val">—</span></div>
         </div>
 
         <div id="action-buttons">
           <button id="btn-diplomacy"  class="btn-action">🤝 Negotiate</button>
-          <button id="btn-build-unit" class="btn-action">⚔ Train Unit</button>
-          <button id="btn-fortify"    class="btn-action">◈ Fortify</button>
-          <button id="btn-tech"       class="btn-action">📚 Research</button>
-          <button id="btn-move-units" class="btn-action btn-move">↗ Move / Attack</button>
-          <button id="btn-cancel-move" class="btn-action btn-danger hidden">✕ Cancel Move</button>
+          <button id="btn-build-unit" class="btn-action">🕴 Deploy Ops</button>
+          <button id="btn-fortify"    class="btn-action">◈ Entrench</button>
+          <button id="btn-tech"       class="btn-action">📋 Legislation</button>
+          <button id="btn-move-units" class="btn-action btn-move">↗ March / Strike</button>
+          <button id="btn-cancel-move" class="btn-action btn-danger hidden">✕ Cancel</button>
         </div>
 
         <div id="territory-panel">
-          <div class="territory-placeholder">Click a territory to inspect</div>
+          <div class="territory-placeholder">Click a state to inspect</div>
         </div>
       </div>
 
@@ -126,55 +128,53 @@
           <div class="phase-step active" data-phase="DIPLOMACY">
             <span class="ph-icon">🤝</span>
             <span class="ph-name">Diplomacy</span>
-            <span class="ph-desc">Propose, accept or break agreements</span>
+            <span class="ph-desc">Propose, accept, or betray coalitions</span>
           </div>
           <div class="phase-step" data-phase="BUILD">
-            <span class="ph-icon">⚒</span>
+            <span class="ph-icon">🏗</span>
             <span class="ph-name">Build</span>
-            <span class="ph-desc">Train units, research tech, fortify</span>
+            <span class="ph-desc">Deploy ops, pass legislation, entrench</span>
           </div>
-          <div class="phase-step" data-phase="MOVE">
+          <div class="phase-step" data-phase="MARCH">
             <span class="ph-icon">↗</span>
             <span class="ph-name">March</span>
-            <span class="ph-desc">Move armies and attack enemies</span>
+            <span class="ph-desc">Move operations and seize states</span>
           </div>
         </div>
 
         <div id="log-panel">
-          <h3 class="panel-title">Event Log</h3>
+          <h3 class="panel-title">Intelligence Feed</h3>
           <div id="event-log"></div>
         </div>
       </div>
 
-    </div><!-- /main-area -->
+    </div>
 
-    <!-- Status bar -->
     <div id="status-bar">
       <span id="status-message"></span>
     </div>
 
-  </div><!-- /game-screen -->
+  </div>
 
   <!-- ═══════════════════════════════════════════ MODALS -->
-
   <div id="modal-overlay" class="hidden"></div>
 
-  <!-- Build Modal -->
+  <!-- Deploy Modal -->
   <div id="build-modal" class="game-modal hidden">
     <div class="modal-inner">
       <div class="modal-header">
-        <h2>⚒ Train Unit</h2>
+        <h2>🕴 Deploy Operations</h2>
         <button class="modal-close">✕</button>
       </div>
       <div id="build-content" class="modal-body"></div>
     </div>
   </div>
 
-  <!-- Tech Modal -->
+  <!-- Research Modal -->
   <div id="tech-modal" class="game-modal hidden">
     <div class="modal-inner wide">
       <div class="modal-header">
-        <h2>📚 Research Laboratory</h2>
+        <h2>📋 Legislative Agenda</h2>
         <button class="modal-close">✕</button>
       </div>
       <div id="tech-content" class="modal-body tech-body"></div>
@@ -185,7 +185,7 @@
   <div id="diplomacy-modal" class="game-modal hidden">
     <div class="modal-inner wide">
       <div class="modal-header">
-        <h2>🤝 Diplomatic Council</h2>
+        <h2>🤝 Coalition Chamber</h2>
         <button class="modal-close">✕</button>
       </div>
       <div id="diplomacy-content" class="modal-body"></div>
@@ -196,17 +196,17 @@
   <div id="victory-screen" class="screen hidden">
     <div class="victory-bg"></div>
     <div class="victory-container">
-      <div class="victory-crown">👑</div>
-      <h1 id="victory-title" class="victory-title">Player Wins!</h1>
+      <div class="victory-crown">🏛</div>
+      <h1 id="victory-title" class="victory-title">Faction Wins!</h1>
       <div id="victory-type" class="victory-type"></div>
       <div class="divider"></div>
-      <h2 class="final-scores-title">Final Standings</h2>
+      <h2 class="final-scores-title">Final Standing</h2>
       <div id="scoreboard" class="scoreboard"></div>
-      <button id="btn-new-game" class="btn-start">Play Again</button>
+      <button id="btn-new-game" class="btn-start">New Campaign</button>
     </div>
   </div>
 
-</div><!-- /app -->
+</div>
 
 <script src="js/game.js"></script>
 <script src="js/renderer.js"></script>

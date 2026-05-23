@@ -1,995 +1,792 @@
 'use strict';
 
 // ============================================================
-// GRAND DOMINION — Complete Game Logic
-// Strategy, Diplomacy, Betrayal. Zero luck.
+// THE REPUBLIC — Core Game Logic
+// A game of US political power, dark money, and betrayal
 // ============================================================
 
 const CONFIG = {
-  HEX_SIZE: 26,
-  MAP_RADIUS: 7,
-  MAX_TURNS: 60,
-  AI_TURN_DELAY_MS: 600,
+  CELL_W: 58,
+  CELL_H: 44,
+  MAP_COLS: 12,
+  MAP_ROWS: 7,
+  MAX_TURNS: 50,
+  EV_WIN: 270,
+  SCANDAL_THRESHOLD: 10,
 
-  TERRAINS: {
-    PLAINS:    { name: 'Plains',       color: '#4a7c3f', light: '#5d9e50', resources: { food: 2 },                          defBonus: 0,  passable: true,  symbol: '≋' },
-    FOREST:    { name: 'Forest',       color: '#2d5a27', light: '#3a7332', resources: { food: 1, knowledge: 1 },            defBonus: 1,  passable: true,  symbol: '♦' },
-    HILLS:     { name: 'Hills',        color: '#7a6e55', light: '#9a8e6d', resources: { iron: 1, food: 1 },                 defBonus: 2,  passable: true,  symbol: '∧' },
-    MOUNTAINS: { name: 'Mountains',    color: '#5a4d3e', light: '#6b5b4c', resources: {},                                   defBonus: 99, passable: false, symbol: '▲' },
-    CITY:      { name: 'City',         color: '#8b6914', light: '#b8930a', resources: { gold: 3 },                          defBonus: 1,  passable: true,  symbol: '⌂' },
-    PORT:      { name: 'Port',         color: '#1a5276', light: '#2471a3', resources: { gold: 2, food: 1 },                 defBonus: 0,  passable: true,  symbol: '⚓' },
-    ANCIENT:   { name: 'Ancient Site', color: '#5b2c6f', light: '#7d3c98', resources: { knowledge: 3 },                    defBonus: 0,  passable: true,  symbol: '✦' },
-    CAPITAL:   { name: 'Capital',      color: '#8e6b00', light: '#c9a227', resources: { gold: 3, food: 2, iron: 1, knowledge: 1 }, defBonus: 2, passable: true, symbol: '★' },
-  },
-
-  UNITS: {
-    INFANTRY: {
-      name: 'Infantry',     cost: { gold: 10, food: 5 },
-      attack: 2, defense: 3, move: 1, upkeep: 1,
-      icon: '⚔', color: '#aaa',
-      desc: 'Solid all-rounder. Good defense.'
+  FACTIONS: {
+    ESTABLISHMENT: {
+      id: 0,
+      name: 'The Establishment',
+      abbr: 'EST',
+      color: { primary: '#c9a227', mid: '#8a6e1a', light: '#f0d060', dark: '#3a2a05' },
+      desc: 'Old money, old rules. Controls institutions.',
+      startBonus: { funds: 60, media: 30, ground: 20, capital: 40 }
     },
-    CAVALRY: {
-      name: 'Cavalry',      cost: { gold: 15, food: 5, iron: 5 },
-      attack: 4, defense: 2, move: 3, upkeep: 1,
-      icon: '♞', color: '#f0a500',
-      desc: 'Fast and powerful. Weak defense.'
+    MOVEMENT: {
+      id: 1,
+      name: 'The Movement',
+      abbr: 'MOV',
+      color: { primary: '#cc2222', mid: '#881818', light: '#ff6666', dark: '#2a0505' },
+      desc: 'Populist rage. Thrives on chaos and grievance.',
+      startBonus: { funds: 30, media: 50, ground: 40, capital: 30 }
     },
-    ARTILLERY: {
-      name: 'Artillery',    cost: { gold: 20, iron: 10 },
-      attack: 6, defense: 1, move: 1, upkeep: 1, ranged: true,
-      icon: '◉', color: '#e05050',
-      desc: 'Devastating attack. Can fire from adjacent hex.'
+    PROGRESSIVES: {
+      id: 2,
+      name: 'The Progressives',
+      abbr: 'PRG',
+      color: { primary: '#2a9d4a', mid: '#1a6a32', light: '#55dd77', dark: '#052a10' },
+      desc: 'Coalition builders. Strong in cities and coasts.',
+      startBonus: { funds: 40, media: 40, ground: 50, capital: 20 }
     },
-    SIEGE: {
-      name: 'Siege Engine', cost: { gold: 25, iron: 15 },
-      attack: 3, defense: 2, move: 1, upkeep: 1, siegeBonus: 6,
-      icon: '◈', color: '#9b59b6',
-      desc: '+6 attack vs fortified territories.'
+    CORPORATE: {
+      id: 3,
+      name: 'The Corporate Bloc',
+      abbr: 'CORP',
+      color: { primary: '#2255cc', mid: '#163588', light: '#5588ff', dark: '#050f2a' },
+      desc: 'Capital controls policy. Always has an exit strategy.',
+      startBonus: { funds: 80, media: 20, ground: 10, capital: 50 }
     },
-  },
-
-  // Research tree: branch → tier → techId
-  TECHS: {
-    // ── MILITARY ──────────────────────────────────────────────
-    STEEL_WEAPONS: {
-      name: 'Steel Weapons', branch: 'military', tier: 1,
-      cost: { knowledge: 15, iron: 8 }, requires: [],
-      effect: 'All unit attack +1.',
-      apply: (p) => { p.bonuses.attack = (p.bonuses.attack || 0) + 1; },
-      icon: '⚔', color: '#e74c3c'
+    TECH: {
+      id: 4,
+      name: 'The Tech Oligarchy',
+      abbr: 'TECH',
+      color: { primary: '#00c8c8', mid: '#008080', light: '#55ffff', dark: '#002a2a' },
+      desc: 'Data is power. Invisible and everywhere.',
+      startBonus: { funds: 50, media: 60, ground: 10, capital: 30 }
     },
-    WAR_DOCTRINE: {
-      name: 'War Doctrine',  branch: 'military', tier: 2,
-      cost: { knowledge: 25, iron: 12 }, requires: ['STEEL_WEAPONS'],
-      effect: 'All unit attack +1, defense +1.',
-      apply: (p) => { p.bonuses.attack = (p.bonuses.attack || 0) + 1; p.bonuses.defense = (p.bonuses.defense || 0) + 1; },
-      icon: '🎯', color: '#c0392b'
-    },
-    IMPERIAL_LEGIONS: {
-      name: 'Imperial Legions', branch: 'military', tier: 3,
-      cost: { knowledge: 40, iron: 20 }, requires: ['WAR_DOCTRINE'],
-      effect: 'All unit attack +2, defense +1.',
-      apply: (p) => { p.bonuses.attack = (p.bonuses.attack || 0) + 2; p.bonuses.defense = (p.bonuses.defense || 0) + 1; },
-      icon: '🛡', color: '#a93226'
-    },
-    // ── ECONOMY ───────────────────────────────────────────────
-    AGRICULTURE: {
-      name: 'Agriculture',   branch: 'economy', tier: 1,
-      cost: { knowledge: 12 }, requires: [],
-      effect: 'Food production +50%.',
-      apply: (p) => { p.bonuses.foodMult = (p.bonuses.foodMult || 1) * 1.5; },
-      icon: '🌾', color: '#27ae60'
-    },
-    TRADE_ROUTES: {
-      name: 'Trade Routes',  branch: 'economy', tier: 2,
-      cost: { knowledge: 22, gold: 15 }, requires: ['AGRICULTURE'],
-      effect: 'Gold production +50%.',
-      apply: (p) => { p.bonuses.goldMult = (p.bonuses.goldMult || 1) * 1.5; },
-      icon: '💰', color: '#229954'
-    },
-    INDUSTRIALIZATION: {
-      name: 'Industrialization', branch: 'economy', tier: 3,
-      cost: { knowledge: 35, gold: 20 }, requires: ['TRADE_ROUTES'],
-      effect: 'Iron production +100%.',
-      apply: (p) => { p.bonuses.ironMult = (p.bonuses.ironMult || 1) * 2; },
-      icon: '⚙', color: '#1e8449'
-    },
-    // ── KNOWLEDGE ─────────────────────────────────────────────
-    LIBRARIES: {
-      name: 'Great Libraries', branch: 'knowledge', tier: 1,
-      cost: { knowledge: 10, gold: 20 }, requires: [],
-      effect: 'Knowledge production +75%.',
-      apply: (p) => { p.bonuses.knowledgeMult = (p.bonuses.knowledgeMult || 1) * 1.75; },
-      icon: '📚', color: '#2980b9'
-    },
-    UNIVERSITIES: {
-      name: 'Universities',  branch: 'knowledge', tier: 2,
-      cost: { knowledge: 25, gold: 30 }, requires: ['LIBRARIES'],
-      effect: 'Can research 2 techs per turn.',
-      apply: (p) => { p.bonuses.dualResearch = true; },
-      icon: '🎓', color: '#1a6fa5'
-    },
-    GRAND_PHILOSOPHY: {
-      name: 'Grand Philosophy', branch: 'knowledge', tier: 3,
-      cost: { knowledge: 50 }, requires: ['UNIVERSITIES'],
-      effect: 'Counts as +3 techs for Knowledge Victory.',
-      apply: (p) => { p.bonuses.extraTechs = (p.bonuses.extraTechs || 0) + 3; },
-      icon: '🔮', color: '#145a87'
-    },
-    // ── DIPLOMACY ─────────────────────────────────────────────
-    AMBASSADORS: {
-      name: 'Ambassadors',   branch: 'diplomacy', tier: 1,
-      cost: { knowledge: 12, gold: 15 }, requires: [],
-      effect: 'Can hold 3 agreements (default 2). Rep loss from betrayal -30%.',
-      apply: (p) => { p.bonuses.maxAgreements = 3; p.bonuses.repProtection = true; },
-      icon: '🤝', color: '#8e44ad'
-    },
-    SPY_NETWORK: {
-      name: 'Spy Network',   branch: 'diplomacy', tier: 2,
-      cost: { knowledge: 20, gold: 25 }, requires: ['AMBASSADORS'],
-      effect: 'See exact enemy resource counts. Betrayal reveals hidden intentions.',
-      apply: (p) => { p.bonuses.spyVision = true; },
-      icon: '🕵', color: '#7d3c98'
-    },
-    PROPAGANDA: {
-      name: 'Propaganda',    branch: 'diplomacy', tier: 3,
-      cost: { knowledge: 35, gold: 35 }, requires: ['SPY_NETWORK'],
-      effect: 'Once per 5 turns: convert 1 enemy unit in an adjacent territory.',
-      apply: (p) => { p.bonuses.propaganda = true; p.bonuses.propagandaCooldown = 0; },
-      icon: '📢', color: '#6c3483'
+    HEARTLAND: {
+      id: 5,
+      name: 'The Heartland Alliance',
+      abbr: 'HRT',
+      color: { primary: '#d4822a', mid: '#8a5518', light: '#ffbb55', dark: '#2a1505' },
+      desc: 'Rural roots. Plays long and patient.',
+      startBonus: { funds: 35, media: 20, ground: 60, capital: 35 }
     },
   },
 
-  AGREEMENTS: {
-    NAP: {
-      name: 'Non-Aggression Pact', icon: '🕊',
-      duration: 6, repLoss: 25,
-      desc: 'Cannot attack each other for 6 turns. Breaking costs 25 reputation.'
+  OPERATIONS: {
+    OPERATIVE: {
+      name: 'Campaign Operative',
+      icon: '🕴',
+      cost: { funds: 15, capital: 5 },
+      upkeep: { funds: 3 },
+      attack: 3, defense: 2, move: 2,
+      desc: 'Versatile ground-level agent.'
     },
-    TRADE: {
-      name: 'Trade Agreement', icon: '💱',
-      duration: -1, repLoss: 12,
-      desc: 'Share 15% of Gold production. Cancel with 2 turns notice.'
+    MEDIA_TEAM: {
+      name: 'Media Team',
+      icon: '📡',
+      cost: { funds: 20, media: 10 },
+      upkeep: { funds: 4, media: 2 },
+      attack: 5, defense: 1, move: 1,
+      desc: 'Amplifies narrative. Weak in a fight.'
     },
-    ALLIANCE: {
-      name: 'Military Alliance', icon: '⚜',
-      duration: -1, repLoss: 40,
-      desc: 'Full military pact. +1 defense in shared borders. Share territory vision.'
+    GRASSROOTS: {
+      name: 'Grassroots Network',
+      icon: '✊',
+      cost: { funds: 10, ground: 15 },
+      upkeep: { ground: 2 },
+      attack: 2, defense: 4, move: 1,
+      desc: 'Cheap, dug-in, hard to dislodge.'
+    },
+    DARK_MONEY: {
+      name: 'Dark Money PAC',
+      icon: '💼',
+      cost: { funds: 30 },
+      upkeep: { funds: 5 },
+      attack: 6, defense: 1, move: 3,
+      stealthy: true,
+      desc: 'Fast-moving. Hidden from rivals until it strikes.'
+    },
+    OPP_RESEARCH: {
+      name: 'Opposition Researcher',
+      icon: '🔍',
+      cost: { funds: 25, capital: 10 },
+      upkeep: { funds: 4 },
+      attack: 2, defense: 1, move: 2,
+      canScandalize: true,
+      desc: 'Exposes opponents. Raises their scandal level.'
+    },
+    POWER_BROKER: {
+      name: 'Power Broker',
+      icon: '🤝',
+      cost: { funds: 40, capital: 20 },
+      upkeep: { funds: 8, capital: 3 },
+      attack: 8, defense: 5, move: 1,
+      desc: 'Elite operative. Supreme in any theater.'
     },
   },
 
-  PLAYER_COLORS: [
-    { primary: '#2563eb', mid: '#3b82f6', light: '#bfdbfe', name: 'Azurian Empire' },
-    { primary: '#dc2626', mid: '#ef4444', light: '#fecaca', name: 'Crimson Kingdom' },
-    { primary: '#16a34a', mid: '#22c55e', light: '#bbf7d0', name: 'Emerald Republic' },
-    { primary: '#7c3aed', mid: '#8b5cf6', light: '#ede9fe', name: 'Violet Dominion' },
-    { primary: '#d97706', mid: '#f59e0b', light: '#fde68a', name: 'Amber Dynasty' },
-    { primary: '#0891b2', mid: '#06b6d4', light: '#cffafe', name: 'Teal Confederacy' },
+  POLICIES: {
+    SOCIAL_MEDIA:    { name: 'Social Media Blitz',    branch: 'Digital',   tier: 1, cost: { funds: 30, media: 20 },    effect: 'Media income +25%',                      icon: '📱' },
+    MICRO_TARGETING: { name: 'Micro-Targeting AI',    branch: 'Digital',   tier: 2, cost: { funds: 50, media: 30 },    effect: 'See all rival ops in range',              icon: '🎯' },
+    DEEP_FAKE:       { name: 'Synthetic Media',        branch: 'Digital',   tier: 3, cost: { funds: 80, media: 50 },    effect: 'Double scandal from Opp Research',        icon: '🤖' },
+    RALLY_CIRCUIT:   { name: 'Rally Circuit',          branch: 'Populist',  tier: 1, cost: { funds: 25, ground: 20 },   effect: 'Ground income +25%',                      icon: '📢' },
+    BASE_ACTIVATION: { name: 'Base Activation',        branch: 'Populist',  tier: 2, cost: { funds: 40, ground: 30 },   effect: 'Grassroots +2 defense',                   icon: '🔥' },
+    VOTER_SURGE:     { name: 'Voter Surge Machine',    branch: 'Populist',  tier: 3, cost: { funds: 60, ground: 50 },   effect: '+1 EV from every owned state',            icon: '🗳' },
+    OPPO_NETWORK:    { name: 'Opposition Network',     branch: 'Dark Arts', tier: 1, cost: { funds: 35, capital: 20 },  effect: 'Opp Research range +1',                   icon: '🕵' },
+    DARK_OPS:        { name: 'Dark Operations',        branch: 'Dark Arts', tier: 2, cost: { funds: 55, capital: 30 },  effect: 'Dark Money PAC +2 move',                  icon: '🌑' },
+    REGIME_CAPTURE:  { name: 'Institutional Capture',  branch: 'Dark Arts', tier: 3, cost: { funds: 90, capital: 50 },  effect: '+3 to all attack values',                 icon: '🏛' },
+    UNITY_PLEDGE:    { name: 'Unity Pledge',           branch: 'Coalition', tier: 1, cost: { funds: 20, capital: 15 },  effect: 'Coalition break costs +15 rep',           icon: '🕊' },
+    SUPERDELEGATE:   { name: 'Superdelegate Network',  branch: 'Coalition', tier: 2, cost: { funds: 45, capital: 25 },  effect: 'Receive 5 capital per coalition partner', icon: '🎖' },
+    PARTY_MACHINE:   { name: 'Party Machine',          branch: 'Coalition', tier: 3, cost: { funds: 70, capital: 40 },  effect: 'Start each turn with +10 capital',        icon: '⚙' },
+  },
+
+  COALITION_TYPES: {
+    NON_COMPETE:  { name: 'Non-Compete Pact',    duration: 5,  repCost: 20, desc: 'Neither attacks the other.' },
+    FUNDING_PACT: { name: 'Funding Pact',        duration: -1, repCost: 15, desc: 'Share 10% of fund income each turn.' },
+    OPP_ALLIANCE: { name: 'Opposition Alliance', duration: -1, repCost: 30, desc: '+2 attack vs shared enemies.' },
+  },
+
+  STATE_TYPES: {
+    SAFE_BLUE:  { name: 'Safe Blue',    color: '#0d2a5a', border: '#1a4a9a', defBonus: 3, income: { funds: 8, media: 4, ground: 2, capital: 3 } },
+    LEAN_BLUE:  { name: 'Lean Blue',    color: '#1a3a6a', border: '#2255aa', defBonus: 2, income: { funds: 5, media: 3, ground: 2, capital: 2 } },
+    SWING:      { name: 'Swing State',  color: '#3a1a4a', border: '#7a3a8a', defBonus: 1, income: { funds: 6, media: 5, ground: 4, capital: 4 } },
+    LEAN_RED:   { name: 'Lean Red',     color: '#5a1a1a', border: '#aa2222', defBonus: 2, income: { funds: 4, media: 3, ground: 4, capital: 2 } },
+    RURAL_RED:  { name: 'Rural Red',    color: '#3a0a0a', border: '#772222', defBonus: 3, income: { funds: 3, media: 2, ground: 5, capital: 2 } },
+    DC:         { name: 'D.C.',         color: '#2a0a3a', border: '#8a22aa', defBonus: 4, income: { funds: 10, media: 8, ground: 2, capital: 8 } },
+  },
+
+  STATES: {
+    WA:  { col: 0,  row: 0, ev: 12, lean: 'SAFE_BLUE',  abbr: 'WA', name: 'Washington' },
+    MT:  { col: 1,  row: 0, ev: 4,  lean: 'RURAL_RED',  abbr: 'MT', name: 'Montana' },
+    ND:  { col: 2,  row: 0, ev: 3,  lean: 'RURAL_RED',  abbr: 'ND', name: 'N. Dakota' },
+    MN:  { col: 3,  row: 0, ev: 10, lean: 'LEAN_BLUE',  abbr: 'MN', name: 'Minnesota' },
+    VT:  { col: 8,  row: 0, ev: 3,  lean: 'SAFE_BLUE',  abbr: 'VT', name: 'Vermont' },
+    NH:  { col: 9,  row: 0, ev: 4,  lean: 'LEAN_BLUE',  abbr: 'NH', name: 'N. Hampshire' },
+    ME:  { col: 10, row: 0, ev: 4,  lean: 'LEAN_BLUE',  abbr: 'ME', name: 'Maine' },
+
+    OR:  { col: 0,  row: 1, ev: 8,  lean: 'LEAN_BLUE',  abbr: 'OR', name: 'Oregon' },
+    ID:  { col: 1,  row: 1, ev: 4,  lean: 'RURAL_RED',  abbr: 'ID', name: 'Idaho' },
+    WY:  { col: 2,  row: 1, ev: 3,  lean: 'RURAL_RED',  abbr: 'WY', name: 'Wyoming' },
+    SD:  { col: 3,  row: 1, ev: 3,  lean: 'RURAL_RED',  abbr: 'SD', name: 'S. Dakota' },
+    WI:  { col: 4,  row: 1, ev: 10, lean: 'SWING',      abbr: 'WI', name: 'Wisconsin' },
+    MI:  { col: 5,  row: 1, ev: 15, lean: 'SWING',      abbr: 'MI', name: 'Michigan' },
+    NY:  { col: 7,  row: 1, ev: 28, lean: 'SAFE_BLUE',  abbr: 'NY', name: 'New York' },
+    MA:  { col: 9,  row: 1, ev: 11, lean: 'SAFE_BLUE',  abbr: 'MA', name: 'Massachusetts' },
+
+    CA:  { col: 0,  row: 2, ev: 54, lean: 'SAFE_BLUE',  abbr: 'CA', name: 'California' },
+    NV:  { col: 1,  row: 2, ev: 6,  lean: 'LEAN_BLUE',  abbr: 'NV', name: 'Nevada' },
+    UT:  { col: 2,  row: 2, ev: 6,  lean: 'LEAN_RED',   abbr: 'UT', name: 'Utah' },
+    CO:  { col: 3,  row: 2, ev: 10, lean: 'LEAN_BLUE',  abbr: 'CO', name: 'Colorado' },
+    NE:  { col: 4,  row: 2, ev: 5,  lean: 'RURAL_RED',  abbr: 'NE', name: 'Nebraska' },
+    IA:  { col: 5,  row: 2, ev: 6,  lean: 'LEAN_RED',   abbr: 'IA', name: 'Iowa' },
+    IL:  { col: 6,  row: 2, ev: 19, lean: 'SAFE_BLUE',  abbr: 'IL', name: 'Illinois' },
+    OH:  { col: 7,  row: 2, ev: 17, lean: 'SWING',      abbr: 'OH', name: 'Ohio' },
+    PA:  { col: 8,  row: 2, ev: 19, lean: 'SWING',      abbr: 'PA', name: 'Pennsylvania' },
+    NJ:  { col: 10, row: 2, ev: 14, lean: 'LEAN_BLUE',  abbr: 'NJ', name: 'New Jersey' },
+    CT:  { col: 11, row: 2, ev: 7,  lean: 'SAFE_BLUE',  abbr: 'CT', name: 'Connecticut' },
+
+    AZ:  { col: 1,  row: 3, ev: 11, lean: 'SWING',      abbr: 'AZ', name: 'Arizona' },
+    NM:  { col: 2,  row: 3, ev: 5,  lean: 'LEAN_BLUE',  abbr: 'NM', name: 'New Mexico' },
+    KS:  { col: 3,  row: 3, ev: 6,  lean: 'LEAN_RED',   abbr: 'KS', name: 'Kansas' },
+    MO:  { col: 4,  row: 3, ev: 10, lean: 'LEAN_RED',   abbr: 'MO', name: 'Missouri' },
+    IN:  { col: 5,  row: 3, ev: 11, lean: 'LEAN_RED',   abbr: 'IN', name: 'Indiana' },
+    KY:  { col: 6,  row: 3, ev: 8,  lean: 'RURAL_RED',  abbr: 'KY', name: 'Kentucky' },
+    WV:  { col: 7,  row: 3, ev: 4,  lean: 'RURAL_RED',  abbr: 'WV', name: 'W. Virginia' },
+    VA:  { col: 8,  row: 3, ev: 13, lean: 'LEAN_BLUE',  abbr: 'VA', name: 'Virginia' },
+    MD:  { col: 9,  row: 3, ev: 10, lean: 'SAFE_BLUE',  abbr: 'MD', name: 'Maryland' },
+    DE:  { col: 10, row: 3, ev: 3,  lean: 'SAFE_BLUE',  abbr: 'DE', name: 'Delaware' },
+    RI:  { col: 11, row: 3, ev: 4,  lean: 'SAFE_BLUE',  abbr: 'RI', name: 'Rhode Island' },
+
+    OK:  { col: 3,  row: 4, ev: 7,  lean: 'RURAL_RED',  abbr: 'OK', name: 'Oklahoma' },
+    AR:  { col: 4,  row: 4, ev: 6,  lean: 'RURAL_RED',  abbr: 'AR', name: 'Arkansas' },
+    TN:  { col: 5,  row: 4, ev: 11, lean: 'RURAL_RED',  abbr: 'TN', name: 'Tennessee' },
+    AL:  { col: 6,  row: 4, ev: 9,  lean: 'RURAL_RED',  abbr: 'AL', name: 'Alabama' },
+    MS:  { col: 7,  row: 4, ev: 6,  lean: 'RURAL_RED',  abbr: 'MS', name: 'Mississippi' },
+    GA:  { col: 8,  row: 4, ev: 16, lean: 'SWING',      abbr: 'GA', name: 'Georgia' },
+    NC:  { col: 9,  row: 4, ev: 16, lean: 'SWING',      abbr: 'NC', name: 'N. Carolina' },
+    DC:  { col: 10, row: 4, ev: 3,  lean: 'DC',         abbr: 'DC', name: 'D.C.' },
+
+    TX:  { col: 3,  row: 5, ev: 40, lean: 'LEAN_RED',   abbr: 'TX', name: 'Texas' },
+    LA:  { col: 4,  row: 5, ev: 8,  lean: 'RURAL_RED',  abbr: 'LA', name: 'Louisiana' },
+    FL:  { col: 7,  row: 5, ev: 30, lean: 'SWING',      abbr: 'FL', name: 'Florida' },
+    SC:  { col: 9,  row: 5, ev: 9,  lean: 'LEAN_RED',   abbr: 'SC', name: 'S. Carolina' },
+
+    HI:  { col: 0,  row: 6, ev: 4,  lean: 'SAFE_BLUE',  abbr: 'HI', name: 'Hawaii' },
+    AK:  { col: 1,  row: 6, ev: 3,  lean: 'RURAL_RED',  abbr: 'AK', name: 'Alaska' },
+  },
+
+  ADJACENCY_OVERRIDES: [
+    ['NY', 'NJ'], ['NY', 'CT'], ['MA', 'RI'], ['MA', 'CT'],
+    ['VA', 'DC'], ['TX', 'NM'], ['ME', 'NH'],
   ],
 
-  STARTING_POSITIONS: {
-    3: [[0,-6],[5,2],[-5,4]],
-    4: [[0,-6],[6,-2],[0,6],[-6,2]],
-    5: [[0,-6],[6,-4],[3,4],[-3,5],[-6,2]],
-    6: [[0,-6],[6,-4],[5,2],[-1,6],[-6,3],[-5,-1]],
+  FACTION_STARTS: {
+    0: ['WA', 'OR', 'CA'],
+    1: ['PA', 'OH', 'WV'],
+    2: ['NY', 'NJ', 'MA'],
+    3: ['IL', 'IN', 'MI'],
+    4: ['TX', 'OK', 'AR'],
+    5: ['ND', 'SD', 'MT'],
   },
 
-  AI_PERSONALITIES: [
-    { id: 'CONQUEROR', name: 'The Conqueror', desc: 'Aggressive military expansion',  weights: { military:0.55, economy:0.15, tech:0.10, diplomacy:0.20 } },
-    { id: 'MERCHANT',  name: 'The Merchant',  desc: 'Economic and trade dominance',   weights: { military:0.10, economy:0.55, tech:0.20, diplomacy:0.15 } },
-    { id: 'SCHOLAR',   name: 'The Scholar',   desc: 'Technology above all',            weights: { military:0.10, economy:0.20, tech:0.55, diplomacy:0.15 } },
-    { id: 'DIPLOMAT',  name: 'The Diplomat',  desc: 'Master of alliances and betrayal', weights: { military:0.15, economy:0.20, tech:0.15, diplomacy:0.50 } },
-    { id: 'OPPORTUNIST',name:'The Opportunist',desc:'Exploits every weakness',          weights: { military:0.25, economy:0.25, tech:0.25, diplomacy:0.25 } },
-  ],
-};
-
-// ============================================================
-// HEX MATH
-// ============================================================
-
-const Hex = {
-  dist(q1, r1, q2, r2) {
-    return (Math.abs(q1 - q2) + Math.abs(r1 - r2) + Math.abs(q1 + r1 - q2 - r2)) / 2;
-  },
-
-  neighbors(q, r) {
-    return [[1,0],[1,-1],[0,-1],[-1,0],[-1,1],[0,1]].map(([dq,dr]) => ({ q: q+dq, r: r+dr }));
-  },
-
-  toPixel(q, r, size) {
-    return {
-      x: size * (3/2 * q),
-      y: size * (Math.sqrt(3)/2 * q + Math.sqrt(3) * r)
-    };
-  },
-
-  fromPixel(px, py, size) {
-    const q = (2/3 * px) / size;
-    const r = (-1/3 * px + (Math.sqrt(3)/3) * py) / size;
-    return Hex.round(q, r);
-  },
-
-  round(q, r) {
-    const s = -q - r;
-    let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
-    const dq = Math.abs(rq-q), dr = Math.abs(rr-r), ds = Math.abs(rs-s);
-    if (dq > dr && dq > ds) rq = -rr - rs;
-    else if (dr > ds) rr = -rq - rs;
-    return { q: rq, r: rr };
-  },
-
-  key(q, r) { return `${q},${r}`; },
-  parseKey(k) { const [q,r] = k.split(',').map(Number); return {q,r}; },
-
-  ring(q, r, radius, territories) {
-    const results = [];
-    for (let dq = -radius; dq <= radius; dq++) {
-      for (let dr = Math.max(-radius, -dq-radius); dr <= Math.min(radius, -dq+radius); dr++) {
-        const k = Hex.key(q+dq, r+dr);
-        if (territories[k]) results.push(k);
-      }
-    }
-    return results;
-  },
-
-  hexCorners(cx, cy, size) {
-    const corners = [];
-    for (let i = 0; i < 6; i++) {
-      const angle = (Math.PI / 180) * (60 * i);
-      corners.push({ x: cx + size * Math.cos(angle), y: cy + size * Math.sin(angle) });
-    }
-    return corners;
+  AI_PERSONALITIES: {
+    HAWK:         { weights: { attack: 0.7, expand: 0.8, defend: 0.3, media: 0.2, money: 0.5 } },
+    DEALMAKER:    { weights: { attack: 0.2, expand: 0.4, defend: 0.6, media: 0.4, money: 0.8 } },
+    PROPAGANDIST: { weights: { attack: 0.3, expand: 0.5, defend: 0.5, media: 0.9, money: 0.4 } },
+    SCHEMER:      { weights: { attack: 0.5, expand: 0.6, defend: 0.4, media: 0.6, money: 0.6 } },
+    POPULIST:     { weights: { attack: 0.6, expand: 0.7, defend: 0.5, media: 0.7, money: 0.3 } },
   },
 };
 
-// ============================================================
-// MAP GENERATION
-// ============================================================
+// ── Build adjacency map from grid + overrides ─────────────────
+function buildAdjacency() {
+  const adj = {};
+  const stateKeys = Object.keys(CONFIG.STATES);
+  for (const k of stateKeys) adj[k] = new Set();
 
-function generateMap(numPlayers) {
-  const R = CONFIG.MAP_RADIUS;
-  const territories = {};
-  const adjacency   = {};
-
-  // Terrain override sets
-  const mountainSet = new Set([
-    '3,-4','4,-4','3,-5','2,-5','4,-5',   // NE range
-    '-3,-3','-4,-2','-4,-1','-2,-4',      // NW range
-    '0,5','1,5','2,4','-1,5',             // South wall
-    '-5,2','-5,1','-5,3',                 // Far west ridge
-    '5,-3','5,-2','4,-3',                 // Far east ridge
-    '1,-2','-1,2','2,-2','-2,2',          // Central spine
-  ].map(k => k));
-
-  const citySet = new Set([
-    '0,0','3,1','-3,-1','1,-4','-1,4','4,2','-4,-2',
-  ].map(k => k));
-
-  const ancientSet = new Set([
-    '1,-1','-1,1','0,-2','0,2','2,1','-2,-1',
-  ].map(k => k));
-
-  const portSet = new Set([
-    '6,-1','7,-1','7,-2','7,0',
-    '-6,1','-7,1','-7,0','-7,2',
-    '0,-7','1,-7','2,-6',
-    '0,7','-1,7','-2,6',
-    '5,2','4,3','3,4',
-    '-5,-1','-4,-2','-3,-4',
-  ].map(k => k));
-
-  const forestSet = new Set([
-    '2,0','1,1','0,1','-1,0','0,-1','-1,-1',
-    '3,-1','4,-2','4,-1',
-    '-3,1','-4,2','-4,1',
-    '2,-3','1,-3',
-    '-2,3','-1,3',
-    '2,3','3,3','-2,-3','-3,-3',
-    '5,-1','5,1','-5,0','-5,-1',
-  ].map(k => k));
-
-  const hillSet = new Set([
-    '2,-1','1,2','-2,1','-1,-2',
-    '3,0','-3,0','0,3','0,-3',
-    '4,1','-4,-1','1,4','-1,-4',
-    '5,-4','5,-5','-5,4','-5,5',
-    '3,-6','-3,6','6,-5','-6,5',
-  ].map(k => k));
-
-  // Capital positions
-  const capitalPos = CONFIG.STARTING_POSITIONS[numPlayers] || CONFIG.STARTING_POSITIONS[4];
-  const capitalSet = new Set(capitalPos.map(([q,r]) => Hex.key(q,r)));
-
-  // Generate all hexes in the circle
-  for (let q = -R; q <= R; q++) {
-    for (let r = -R; r <= R; r++) {
-      if (Math.abs(q+r) <= R) {
-        const k = Hex.key(q,r);
-        let terrain;
-        if      (capitalSet.has(k))  terrain = 'CAPITAL';
-        else if (mountainSet.has(k)) terrain = 'MOUNTAINS';
-        else if (citySet.has(k))     terrain = 'CITY';
-        else if (ancientSet.has(k))  terrain = 'ANCIENT';
-        else if (portSet.has(k))     terrain = 'PORT';
-        else if (forestSet.has(k))   terrain = 'FOREST';
-        else if (hillSet.has(k))     terrain = 'HILLS';
-        else                         terrain = 'PLAINS';
-
-        territories[k] = {
-          q, r, key: k, terrain,
-          owner: null,
-          units: [],          // [{ id, type, owner }]
-          fortification: 0,   // 0-4 stacked fortification level
-        };
+  for (const a of stateKeys) {
+    const sa = CONFIG.STATES[a];
+    for (const b of stateKeys) {
+      if (a === b) continue;
+      const sb = CONFIG.STATES[b];
+      if (Math.abs(sa.col - sb.col) <= 1 && Math.abs(sa.row - sb.row) <= 1) {
+        adj[a].add(b);
+        adj[b].add(a);
       }
     }
   }
 
-  // Build adjacency (excluding impassable mountains from connections still stored but flagged)
-  for (const k of Object.keys(territories)) {
-    const { q, r } = territories[k];
-    adjacency[k] = Hex.neighbors(q, r)
-      .map(n => Hex.key(n.q, n.r))
-      .filter(nk => territories[nk]);
+  for (const [a, b] of CONFIG.ADJACENCY_OVERRIDES) {
+    if (adj[a] && adj[b]) {
+      adj[a].add(b);
+      adj[b].add(a);
+    }
   }
 
-  return { territories, adjacency, capitalPositions: capitalPos };
+  const result = {};
+  for (const k of stateKeys) result[k] = [...adj[k]];
+  return result;
 }
 
-// ============================================================
-// GAME STATE
-// ============================================================
+const ADJACENCY = buildAdjacency();
 
-let _unitIdCounter = 0;
-function makeUnitId() { return `u${++_unitIdCounter}`; }
+// ── Territory (State) ─────────────────────────────────────────
+class Territory {
+  constructor(abbr) {
+    const def       = CONFIG.STATES[abbr];
+    this.abbr       = abbr;
+    this.name       = def.name;
+    this.col        = def.col;
+    this.row        = def.row;
+    this.ev         = def.ev;
+    this.lean       = def.lean;
+    this.owner      = null;
+    this.ops        = [];
+    this.entrenched = 0;
+  }
+}
 
+// ── Operation (unit) instance ─────────────────────────────────
+class Operation {
+  constructor(type, owner) {
+    this.type  = type;
+    this.owner = owner;
+    this.moved = false;
+  }
+}
+
+// ── Coalition instance ────────────────────────────────────────
+class Coalition {
+  constructor(type, p1, p2, turn) {
+    this.type     = type;
+    this.p1       = p1;
+    this.p2       = p2;
+    this.turnMade = turn;
+    this.duration = CONFIG.COALITION_TYPES[type].duration;
+    this.active   = true;
+    this.pending  = false;
+  }
+}
+
+// ── GameState ─────────────────────────────────────────────────
 class GameState {
   constructor() {
-    this.turn        = 1;
-    this.phase       = 'DIPLOMACY'; // DIPLOMACY → BUILD → MOVE → (next player)
-    this.currentPIdx = 0;
     this.players     = [];
     this.territories = {};
-    this.adjacency   = {};
-    this.log         = [];          // { msg, type, turn }
-    this.agreements  = [];          // active agreements
-    this.proposals   = [];          // pending proposals
-    this.pendingMoves = [];         // moves queued this turn (for display)
-    this.victory     = null;        // { playerId, type } or null
-    this.techResearchedThisTurn = 0;
-    this.supplyDebts = {};          // playerId → units disbanded last upkeep
+    this.coalitions  = [];
+    this.turn        = 1;
+    this.phase       = 'DIPLOMACY';
+    this.currentPIdx = 0;
+    this.log         = [];
+    this.winner      = null;
+    this.winType     = null;
   }
 
-  init(numPlayers, playerConfigs) {
-    const mapData = generateMap(numPlayers);
-    this.territories = mapData.territories;
-    this.adjacency   = mapData.adjacency;
-
-    // Create players
+  init(playerConfigs) {
     this.players = playerConfigs.map((cfg, i) => ({
-      id:          i,
-      name:        cfg.name || CONFIG.PLAYER_COLORS[i].name,
-      color:       CONFIG.PLAYER_COLORS[i],
-      isAI:        cfg.isAI || false,
-      aiPersonality: cfg.personality || 'OPPORTUNIST',
-      resources:   { gold: 60, food: 30, iron: 20, knowledge: 10 },
-      techs:       [],     // list of techId strings
-      bonuses:     {},     // accumulated tech bonuses
-      reputation:  75,     // 0-100
-      agreements:  [],     // agreementIds they are party to
-      isAlive:     true,
-      victoryPoints: 0,
+      id:           i,
+      name:         cfg.name,
+      faction:      cfg.faction,
+      isAI:         cfg.isAI,
+      aiPersonality: cfg.aiPersonality || 'SCHEMER',
+      color:        CONFIG.FACTIONS[cfg.faction].color,
+      resources:    { ...CONFIG.FACTIONS[cfg.faction].startBonus },
+      policies:     new Set(),
+      reputation:   50,
+      exposure:     0,
+      alive:        true,
     }));
 
-    // Assign starting territories and units
-    mapData.capitalPositions.forEach(([q, r], idx) => {
-      const capitalKey = Hex.key(q, r);
-      if (!this.territories[capitalKey]) return;
+    for (const abbr of Object.keys(CONFIG.STATES)) {
+      this.territories[abbr] = new Territory(abbr);
+    }
 
-      this.territories[capitalKey].owner = idx;
-
-      // Give 2 adjacent home territories
-      const neighbors = this.adjacency[capitalKey] || [];
-      let homeCount = 0;
-      for (const nk of neighbors) {
-        if (homeCount >= 2) break;
-        const t = this.territories[nk];
-        if (t && t.terrain !== 'MOUNTAINS' && t.owner === null) {
-          t.owner = idx;
-          homeCount++;
+    for (let i = 0; i < this.players.length; i++) {
+      const starts = CONFIG.FACTION_STARTS[i] || [];
+      for (const abbr of starts) {
+        if (this.territories[abbr]) {
+          this.territories[abbr].owner = i;
+          this.territories[abbr].ops.push(new Operation('OPERATIVE', i));
+          this.territories[abbr].ops.push(new Operation('GRASSROOTS', i));
         }
       }
+    }
 
-      // Starting units (2 infantry + 1 cavalry on capital)
-      this.addUnits(capitalKey, idx, 'INFANTRY', 2);
-      this.addUnits(capitalKey, idx, 'CAVALRY',  1);
-    });
-
-    this.log = [];
-    this.addLog('Grand Dominion begins. May the shrewdest mind prevail.', 'system');
-    this.currentPIdx = 0;
-    this.startPlayerTurn();
+    this.addLog('system', `The Republic begins. ${this.players.length} factions vie for ${CONFIG.EV_WIN} electoral votes.`);
+    this.startPlayerTurn(0);
   }
 
-  // ── Resource helpers ──────────────────────────────────────
-
-  getPlayerTerritories(playerId) {
-    return Object.values(this.territories).filter(t => t.owner === playerId);
-  }
+  // ── Resources ─────────────────────────────────────────────
 
   getIncome(playerId) {
-    const p = this.players[playerId];
-    const income = { gold: 0, food: 0, iron: 0, knowledge: 0 };
-    for (const t of this.getPlayerTerritories(playerId)) {
-      const res = CONFIG.TERRAINS[t.terrain].resources;
-      for (const [k, v] of Object.entries(res)) income[k] = (income[k] || 0) + v;
+    const p   = this.players[playerId];
+    const inc = { funds: 0, media: 0, ground: 0, capital: 0 };
+    for (const t of Object.values(this.territories)) {
+      if (t.owner !== playerId) continue;
+      const stDef = CONFIG.STATE_TYPES[t.lean];
+      for (const [res, val] of Object.entries(stDef.income)) {
+        inc[res] = (inc[res] || 0) + val;
+      }
     }
-    // Apply tech bonuses
-    income.food      = Math.floor(income.food      * (p.bonuses.foodMult      || 1));
-    income.gold      = Math.floor(income.gold      * (p.bonuses.goldMult      || 1));
-    income.iron      = Math.floor(income.iron      * (p.bonuses.ironMult      || 1));
-    income.knowledge = Math.floor(income.knowledge * (p.bonuses.knowledgeMult || 1));
+    if (p.policies.has('SOCIAL_MEDIA'))  inc.media  = Math.floor(inc.media  * 1.25);
+    if (p.policies.has('RALLY_CIRCUIT')) inc.ground = Math.floor(inc.ground * 1.25);
+    if (p.policies.has('PARTY_MACHINE')) inc.capital = (inc.capital || 0) + 10;
+    for (const c of this.getActiveCoalitions(playerId)) {
+      if (c.type === 'FUNDING_PACT') {
+        const partnerId = c.p1 === playerId ? c.p2 : c.p1;
+        const pBase = this._baseIncome(partnerId);
+        inc.funds = (inc.funds || 0) + Math.floor(pBase.funds * 0.1);
+      }
+    }
+    return inc;
+  }
 
-    // Trade agreement bonus: +15% gold for each active trade agreement
-    const tradeAgreements = this.agreements.filter(
-      a => a.type === 'TRADE' && (a.p1 === playerId || a.p2 === playerId)
-    );
-    income.gold += Math.floor(income.gold * 0.15 * tradeAgreements.length);
-
-    return income;
+  _baseIncome(playerId) {
+    const inc = { funds: 0, media: 0, ground: 0, capital: 0 };
+    for (const t of Object.values(this.territories)) {
+      if (t.owner !== playerId) continue;
+      const stDef = CONFIG.STATE_TYPES[t.lean];
+      for (const [res, val] of Object.entries(stDef.income)) {
+        inc[res] = (inc[res] || 0) + val;
+      }
+    }
+    return inc;
   }
 
   getUpkeep(playerId) {
-    const units = this.getPlayerUnits(playerId);
-    return { food: units.length };   // 1 food per unit
+    const up = { funds: 0, media: 0, ground: 0, capital: 0 };
+    for (const t of Object.values(this.territories)) {
+      for (const op of t.ops) {
+        if (op.owner !== playerId) continue;
+        const def = CONFIG.OPERATIONS[op.type];
+        for (const [res, val] of Object.entries(def.upkeep)) {
+          up[res] = (up[res] || 0) + val;
+        }
+      }
+    }
+    return up;
   }
 
   collectResources(playerId) {
-    const p = this.players[playerId];
-    const income = this.getIncome(playerId);
-    const upkeep = this.getUpkeep(playerId);
-
-    for (const [k, v] of Object.entries(income)) p.resources[k] = (p.resources[k] || 0) + v;
-
-    // Pay food upkeep — disband weakest units if can't pay
-    let foodDebt = upkeep.food - p.resources.food;
-    if (foodDebt > 0) {
-      p.resources.food = 0;
-      const disbanded = this.disbandWeakestUnits(playerId, foodDebt);
-      if (disbanded > 0) {
-        this.addLog(`${p.name} cannot afford upkeep — ${disbanded} unit(s) disbanded!`, 'warning');
-      }
-    } else {
-      p.resources.food -= upkeep.food;
+    const p  = this.players[playerId];
+    const inc = this.getIncome(playerId);
+    const up  = this.getUpkeep(playerId);
+    for (const res of ['funds', 'media', 'ground', 'capital']) {
+      p.resources[res] = Math.max(0, (p.resources[res] || 0) + (inc[res] || 0) - (up[res] || 0));
     }
-
-    return income;
+    if (p.resources.funds <= 0) this._disbandOps(playerId, 1);
   }
 
-  disbandWeakestUnits(playerId, count) {
+  _disbandOps(playerId, count) {
     let disbanded = 0;
-    const order = ['ARTILLERY', 'SIEGE', 'CAVALRY', 'INFANTRY']; // disband strongest first (cost the most)
-    for (const type of order) {
-      for (const t of Object.values(this.territories)) {
-        if (disbanded >= count) break;
-        const idx = t.units.findIndex(u => u.owner === playerId && u.type === type);
-        if (idx !== -1) { t.units.splice(idx, 1); disbanded++; }
-      }
-      if (disbanded >= count) break;
-    }
-    return disbanded;
-  }
-
-  // ── Unit helpers ──────────────────────────────────────────
-
-  addUnits(territoryKey, ownerId, type, count) {
-    for (let i = 0; i < count; i++) {
-      this.territories[territoryKey].units.push({ id: makeUnitId(), type, owner: ownerId });
-    }
-  }
-
-  getPlayerUnits(playerId) {
-    const units = [];
     for (const t of Object.values(this.territories)) {
-      for (const u of t.units) {
-        if (u.owner === playerId) units.push({ ...u, territory: t.key });
-      }
+      t.ops = t.ops.filter(op => {
+        if (op.owner !== playerId || disbanded >= count) return true;
+        const hasUpkeep = Object.values(CONFIG.OPERATIONS[op.type].upkeep).some(v => v > 0);
+        if (hasUpkeep) { disbanded++; return false; }
+        return true;
+      });
     }
-    return units;
+    if (disbanded > 0) this.addLog(playerId, `${disbanded} ops disbanded (funding crisis).`);
   }
 
-  buildUnit(playerId, territoryKey, unitType) {
+  // ── Electoral Votes ───────────────────────────────────────
+
+  getEV(playerId) {
+    let ev = 0;
     const p = this.players[playerId];
-    const t = this.territories[territoryKey];
-    if (!t || t.owner !== playerId) return { ok: false, reason: 'Not your territory.' };
-    if (t.terrain === 'MOUNTAINS') return { ok: false, reason: 'Cannot build in mountains.' };
-
-    const cost = CONFIG.UNITS[unitType].cost;
-    for (const [res, amt] of Object.entries(cost)) {
-      if ((p.resources[res] || 0) < amt) return { ok: false, reason: `Not enough ${res}.` };
+    for (const t of Object.values(this.territories)) {
+      if (t.owner !== playerId) continue;
+      ev += t.ev;
+      if (p.policies.has('VOTER_SURGE')) ev += 1;
     }
-    for (const [res, amt] of Object.entries(cost)) p.resources[res] -= amt;
+    return ev;
+  }
 
-    this.addUnits(territoryKey, playerId, unitType, 1);
-    this.addLog(`${p.name} trained a ${CONFIG.UNITS[unitType].name}.`, 'build');
+  // ── Deploy Operations ─────────────────────────────────────
+
+  canDeploy(playerId, stateAbbr, opType) {
+    const p   = this.players[playerId];
+    const t   = this.territories[stateAbbr];
+    if (!t || t.owner !== playerId) return { ok: false, reason: 'Not your state.' };
+    const def = CONFIG.OPERATIONS[opType];
+    for (const [res, val] of Object.entries(def.cost)) {
+      if ((p.resources[res] || 0) < val) return { ok: false, reason: `Need ${val} ${res}.` };
+    }
     return { ok: true };
   }
 
-  buildFortification(playerId, territoryKey) {
-    const p = this.players[playerId];
-    const t = this.territories[territoryKey];
-    if (!t || t.owner !== playerId) return { ok: false, reason: 'Not your territory.' };
-    if (t.fortification >= 4) return { ok: false, reason: 'Max fortification reached.' };
-    const cost = { gold: 15, iron: 10 };
-    for (const [res, amt] of Object.entries(cost)) {
-      if ((p.resources[res] || 0) < amt) return { ok: false, reason: `Not enough ${res}.` };
-    }
-    for (const [res, amt] of Object.entries(cost)) p.resources[res] -= amt;
-    t.fortification++;
-    this.addLog(`${p.name} fortified ${territoryKey} (level ${t.fortification}).`, 'build');
+  deployOp(playerId, stateAbbr, opType) {
+    const chk = this.canDeploy(playerId, stateAbbr, opType);
+    if (!chk.ok) return chk;
+    const p   = this.players[playerId];
+    const def = CONFIG.OPERATIONS[opType];
+    for (const [res, val] of Object.entries(def.cost)) p.resources[res] -= val;
+    this.territories[stateAbbr].ops.push(new Operation(opType, playerId));
+    this.addLog(playerId, `Deployed ${def.name} in ${stateAbbr}.`);
     return { ok: true };
   }
 
-  // ── Movement & Combat ─────────────────────────────────────
-
-  canMoveTo(fromKey, toKey, playerId) {
-    const dest = this.territories[toKey];
-    if (!dest) return false;
-    if (!CONFIG.TERRAINS[dest.terrain].passable) return false;
-    return true;
+  entrenchState(playerId, stateAbbr) {
+    const p = this.players[playerId];
+    const t = this.territories[stateAbbr];
+    if (!t || t.owner !== playerId) return { ok: false, reason: 'Not your state.' };
+    if (t.entrenched >= 3) return { ok: false, reason: 'Max entrenchment reached.' };
+    const cost = 25 + t.entrenched * 15;
+    if (p.resources.funds < cost) return { ok: false, reason: `Need ${cost} funds.` };
+    p.resources.funds -= cost;
+    t.entrenched++;
+    this.addLog(playerId, `Entrenched in ${stateAbbr} (level ${t.entrenched}).`);
+    return { ok: true };
   }
 
-  // Get reachable territory keys for a group of units
-  getMoveRange(fromKey, unitTypes, playerId) {
-    if (!unitTypes || unitTypes.length === 0) return new Map();
-    const moveVal = Math.max(...unitTypes.map(t => CONFIG.UNITS[t].move));
-    const visited = new Map(); // key → distance
-    const queue   = [{ key: fromKey, dist: 0 }];
-    visited.set(fromKey, 0);
+  // ── Research Policies ─────────────────────────────────────
 
+  canResearch(playerId, policyKey) {
+    const p   = this.players[playerId];
+    const def = CONFIG.POLICIES[policyKey];
+    if (!def) return { ok: false, reason: 'Unknown policy.' };
+    if (p.policies.has(policyKey)) return { ok: false, reason: 'Already researched.' };
+    if (def.tier > 1) {
+      const prereq = Object.entries(CONFIG.POLICIES).find(([k, v]) => v.branch === def.branch && v.tier === def.tier - 1);
+      if (prereq && !p.policies.has(prereq[0])) return { ok: false, reason: 'Missing prerequisite policy.' };
+    }
+    for (const [res, val] of Object.entries(def.cost)) {
+      if ((p.resources[res] || 0) < val) return { ok: false, reason: `Need ${val} ${res}.` };
+    }
+    return { ok: true };
+  }
+
+  researchPolicy(playerId, policyKey) {
+    const chk = this.canResearch(playerId, policyKey);
+    if (!chk.ok) return chk;
+    const p   = this.players[playerId];
+    const def = CONFIG.POLICIES[policyKey];
+    for (const [res, val] of Object.entries(def.cost)) p.resources[res] -= val;
+    p.policies.add(policyKey);
+    this.addLog(playerId, `Passed: ${def.name}.`);
+    return { ok: true };
+  }
+
+  // ── Movement & Attack ─────────────────────────────────────
+
+  getMoveRange(stateAbbr, opTypes, playerId) {
+    if (!opTypes || opTypes.length === 0) return new Map();
+    const maxMove = Math.max(...opTypes.map(t => {
+      const def = CONFIG.OPERATIONS[t];
+      let m = def.move;
+      if (t === 'DARK_MONEY' && this.players[playerId]?.policies?.has('DARK_OPS')) m += 2;
+      return m;
+    }));
+    const visited = new Map([[stateAbbr, 0]]);
+    const queue   = [{ abbr: stateAbbr, dist: 0 }];
     while (queue.length) {
-      const { key, dist } = queue.shift();
-      if (dist >= moveVal) continue;
-      for (const nk of (this.adjacency[key] || [])) {
-        if (visited.has(nk)) continue;
-        const dest = this.territories[nk];
-        if (!dest || !CONFIG.TERRAINS[dest.terrain].passable) continue;
-        // Can't pass through enemy territory (must attack it)
-        const destOwner = dest.owner;
-        if (destOwner !== null && destOwner !== playerId &&
-            !this.areAllied(playerId, destOwner) && dist < moveVal - 1) {
-          // Can enter (to attack) but can't continue beyond
+      const { abbr, dist } = queue.shift();
+      if (dist >= maxMove) continue;
+      for (const nb of (ADJACENCY[abbr] || [])) {
+        if (!visited.has(nb)) {
+          visited.set(nb, dist + 1);
+          queue.push({ abbr: nb, dist: dist + 1 });
         }
-        visited.set(nk, dist + 1);
-        queue.push({ key: nk, dist: dist + 1 });
       }
     }
-    visited.delete(fromKey);
+    visited.delete(stateAbbr);
     return visited;
   }
 
-  areAllied(p1, p2) {
-    return this.agreements.some(a =>
-      a.type === 'ALLIANCE' && ((a.p1 === p1 && a.p2 === p2) || (a.p1 === p2 && a.p2 === p1))
-    );
-  }
+  moveOps(fromAbbr, toAbbr, playerId, opTypes) {
+    const from = this.territories[fromAbbr];
+    const to   = this.territories[toAbbr];
+    if (!from || !to) return { ok: false, reason: 'Invalid state.' };
 
-  hasNAP(p1, p2) {
-    return this.agreements.some(a =>
-      a.type === 'NAP' && ((a.p1 === p1 && a.p2 === p2) || (a.p1 === p2 && a.p2 === p1))
-    );
-  }
+    const range = this.getMoveRange(fromAbbr, opTypes, playerId);
+    if (!range.has(toAbbr)) return { ok: false, reason: 'Out of range.' };
 
-  moveUnits(playerId, fromKey, toKey, unitIds) {
-    const from = this.territories[fromKey];
-    const to   = this.territories[toKey];
-    if (!from || !to) return { ok: false, reason: 'Invalid territory.' };
-    if (!CONFIG.TERRAINS[to.terrain].passable) return { ok: false, reason: 'Impassable terrain.' };
-
-    const movingUnits = from.units.filter(u => unitIds.includes(u.id) && u.owner === playerId);
-    if (movingUnits.length === 0) return { ok: false, reason: 'No valid units selected.' };
-
-    const toOwner = to.owner;
-    const isEnemy = toOwner !== null && toOwner !== playerId && !this.areAllied(playerId, toOwner);
-    const isNeutral = toOwner === null;
-
-    if (isEnemy && this.hasNAP(playerId, toOwner)) {
-      // Breaking NAP
-      this.breakAgreementWith(playerId, toOwner);
-    }
-
-    if (isEnemy) {
-      // Combat!
-      return this.resolveCombat(playerId, fromKey, toKey, movingUnits);
-    } else {
-      // Peaceful move
-      from.units = from.units.filter(u => !unitIds.includes(u.id));
-      to.units.push(...movingUnits);
-      if (isNeutral) {
-        to.owner = playerId;
-        this.addLog(`${this.players[playerId].name} captured ${toKey}.`, 'capture');
+    const toMove    = [];
+    const remaining = [];
+    for (const op of from.ops) {
+      if (op.owner === playerId && opTypes.includes(op.type) && !op.moved) {
+        toMove.push(op);
+      } else {
+        remaining.push(op);
       }
-      return { ok: true, combat: false };
+    }
+    if (toMove.length === 0) return { ok: false, reason: 'No eligible ops available.' };
+
+    const isHostile = to.owner !== null && to.owner !== playerId && !this.areAllied(playerId, to.owner);
+
+    if (isHostile) {
+      return this._resolveAttack(from, to, toMove, remaining, playerId);
+    } else {
+      toMove.forEach(op => { op.moved = true; to.ops.push(op); });
+      from.ops = remaining;
+      this.addLog(playerId, `Moved ops from ${fromAbbr} → ${toAbbr}.`);
+      return { ok: true };
     }
   }
 
-  resolveCombat(attackerId, fromKey, toKey, attackingUnits) {
-    const p    = this.players[attackerId];
-    const defender = this.territories[toKey];
-    const defenderId = defender.owner;
+  _resolveAttack(from, to, attackers, remaining, attackerId) {
+    const defId  = to.owner;
+    const stDef  = CONFIG.STATE_TYPES[to.lean];
+    const p      = this.players[attackerId];
 
-    const atkBonus = p.bonuses.attack   || 0;
-    const defBonus = (defenderId !== null ? this.players[defenderId].bonuses.defense : 0) || 0;
-
-    let atkStrength = attackingUnits.reduce((sum, u) => sum + CONFIG.UNITS[u.type].attack + atkBonus, 0);
-    let defStrength = defender.units.reduce((sum, u) => {
-      const base = CONFIG.UNITS[u.type].defense + defBonus;
-      const terrBonus = CONFIG.TERRAINS[defender.terrain].defBonus;
-      const fortBonus = defender.fortification * 2;
-      return sum + base + terrBonus + fortBonus;
+    let atkStr = attackers.reduce((s, op) => {
+      let atk = CONFIG.OPERATIONS[op.type].attack;
+      if (p.policies.has('REGIME_CAPTURE')) atk += 3;
+      if (defId !== null) {
+        for (const c of this.getActiveCoalitions(attackerId)) {
+          if (c.type === 'OPP_ALLIANCE') {
+            const partnerId = c.p1 === attackerId ? c.p2 : c.p1;
+            if (this.areAtWar(partnerId, defId)) atk += 2;
+          }
+        }
+      }
+      return s + atk;
     }, 0);
 
-    // Artillery in adjacent tile can assist (ranged support)
-    const atkTerr = this.territories[fromKey];
-    const rangedSupport = atkTerr.units.filter(u => u.owner === attackerId && u.type === 'ARTILLERY' && !attackingUnits.find(a => a.id === u.id));
-    atkStrength += rangedSupport.reduce((s, u) => s + CONFIG.UNITS['ARTILLERY'].attack + atkBonus, 0);
+    const defenders = defId !== null ? to.ops.filter(op => op.owner === defId) : [];
+    let defStr = defenders.reduce((s, op) => {
+      let def = CONFIG.OPERATIONS[op.type].defense;
+      if (this.players[defId]?.policies?.has('BASE_ACTIVATION') && op.type === 'GRASSROOTS') def += 2;
+      return s + def;
+    }, 0);
+    defStr += stDef.defBonus + to.entrenched * 2;
 
-    // Siege engine bonus
-    const siegeUnits = attackingUnits.filter(u => u.type === 'SIEGE');
-    if (siegeUnits.length > 0 && defender.fortification > 0) {
-      atkStrength += siegeUnits.length * CONFIG.UNITS['SIEGE'].siegeBonus;
-    }
-
-    // If no defenders, free capture
-    if (defender.units.length === 0) {
-      const from = this.territories[fromKey];
-      from.units = from.units.filter(u => !attackingUnits.find(a => a.id === u.id));
-      defender.units.push(...attackingUnits);
-      const prevOwner = defender.owner;
-      defender.owner = attackerId;
-      if (prevOwner !== null) {
-        const pd = this.players[prevOwner];
-        const hasTerr = this.getPlayerTerritories(prevOwner).length;
-        if (hasTerr === 0) {
-          pd.isAlive = false;
-          this.addLog(`${pd.name} has been eliminated!`, 'elimination');
-        }
+    if (atkStr > defStr) {
+      const casualties = Math.min(defenders.length, Math.ceil(defenders.length * 0.6));
+      to.ops = to.ops.filter(op => op.owner !== defId).concat(defenders.slice(casualties));
+      const prevOwner = to.owner;
+      to.owner = attackerId;
+      to.entrenched = Math.max(0, to.entrenched - 1);
+      attackers.forEach(op => { op.moved = true; to.ops.push(op); });
+      from.ops = remaining;
+      const prevName = prevOwner !== null ? this.players[prevOwner].name : 'neutral territory';
+      this.addLog(attackerId, `Seized ${to.abbr} (${to.ev} EV) from ${prevName}! [${atkStr} vs ${defStr}]`);
+      if (defId !== null && this._ownedStates(defId).length === 0) {
+        this.players[defId].alive = false;
+        this.addLog('system', `${this.players[defId].name} has been eliminated!`);
       }
-      return { ok: true, combat: true, attWon: true, atkStr: atkStrength, defStr: 0, atkLoss: 0, defLoss: 0 };
-    }
-
-    const attWon = atkStrength > defStrength;
-    const atkLoss = attWon
-      ? Math.max(0, Math.ceil(defStrength * 0.35))
-      : Math.ceil(attackingUnits.length * 0.6);
-    const defLoss = attWon
-      ? defender.units.length
-      : Math.max(0, Math.ceil(defender.units.length * 0.3));
-
-    const logMsg = `${p.name} attacked ${toKey}: ATK ${atkStrength} vs DEF ${defStrength}. ` +
-                   (attWon ? `ATTACKER WINS!` : `DEFENDER HOLDS.`) +
-                   ` Losses — ATK: ${atkLoss}, DEF: ${defLoss}`;
-    this.addLog(logMsg, attWon ? 'combat-win' : 'combat-loss');
-
-    // Apply losses
-    if (attWon) {
-      defender.units = [];
-      const from = this.territories[fromKey];
-      const survivors = [...attackingUnits];
-      for (let i = 0; i < atkLoss && survivors.length; i++) {
-        // Remove weakest first (lowest attack)
-        survivors.sort((a,b) => CONFIG.UNITS[a.type].attack - CONFIG.UNITS[b.type].attack);
-        survivors.shift();
-      }
-      from.units = from.units.filter(u => !attackingUnits.find(a => a.id === u.id));
-      defender.units.push(...survivors);
-      const prevOwner = defender.owner;
-      defender.owner = attackerId;
-      defender.fortification = Math.max(0, defender.fortification - 1); // sieges damage fortifications
-
-      if (prevOwner !== null) {
-        const pd = this.players[prevOwner];
-        if (this.getPlayerTerritories(prevOwner).length === 0) {
-          pd.isAlive = false;
-          this.addLog(`${pd.name} has been eliminated!`, 'elimination');
-        }
-      }
+      return { ok: true, captured: true, atkStr, defStr };
     } else {
-      // Attacker repelled
-      const from = this.territories[fromKey];
-      const survivors = [...attackingUnits];
-      for (let i = 0; i < atkLoss && survivors.length; i++) {
-        survivors.sort((a,b) => CONFIG.UNITS[a.type].attack - CONFIG.UNITS[b.type].attack);
-        survivors.shift();
-      }
-      // Units that survived return to source
-      from.units = from.units.filter(u => !attackingUnits.find(a => a.id === u.id));
-      from.units.push(...survivors);
-
-      // Defender losses
-      const defSorted = [...defender.units].sort((a,b) => CONFIG.UNITS[a.type].defense - CONFIG.UNITS[b.type].defense);
-      const defSurvivors = defSorted.slice(defLoss);
-      defender.units = defSurvivors;
+      const atkCas = Math.ceil(attackers.length * 0.5);
+      const survivors = attackers.slice(atkCas);
+      survivors.forEach(op => { op.moved = true; });
+      from.ops = remaining.concat(survivors);
+      this.addLog(attackerId, `Assault on ${to.abbr} repelled. [${atkStr} vs ${defStr}]`);
+      return { ok: true, captured: false, atkStr, defStr };
     }
-
-    return { ok: true, combat: true, attWon, atkStr: atkStrength, defStr: defStrength, atkLoss, defLoss };
   }
 
-  // ── Technology ────────────────────────────────────────────
-
-  canResearch(playerId, techId) {
-    const p = this.players[playerId];
-    const tech = CONFIG.TECHS[techId];
-    if (!tech) return false;
-    if (p.techs.includes(techId)) return false;
-    for (const [res, amt] of Object.entries(tech.cost)) {
-      if ((p.resources[res] || 0) < amt) return false;
-    }
-    for (const req of tech.requires) {
-      if (!p.techs.includes(req)) return false;
-    }
-    return true;
+  _ownedStates(playerId) {
+    return Object.values(this.territories).filter(t => t.owner === playerId);
   }
 
-  researchTech(playerId, techId) {
-    if (!this.canResearch(playerId, techId)) return { ok: false, reason: 'Cannot research.' };
-    const p = this.players[playerId];
-    const tech = CONFIG.TECHS[techId];
-    const dualResearch = p.bonuses.dualResearch;
-    if (!dualResearch && this.techResearchedThisTurn >= 1) {
-      return { ok: false, reason: 'Can only research 1 tech per turn (need Universities for 2).' };
+  areAllied(a, b) {
+    return this.getActiveCoalitions(a).some(c =>
+      (c.p1 === a && c.p2 === b) || (c.p1 === b && c.p2 === a)
+    );
+  }
+
+  areAtWar(a, b) {
+    return !this.areAllied(a, b) && a !== b;
+  }
+
+  // ── Scandal System ────────────────────────────────────────
+
+  triggerScandal(targetId, attackerId) {
+    const boost = this.players[attackerId]?.policies?.has('DEEP_FAKE') ? 2 : 1;
+    this.players[targetId].exposure = Math.min(20, (this.players[targetId].exposure || 0) + 2 * boost);
+    if (this.players[targetId].exposure >= CONFIG.SCANDAL_THRESHOLD) {
+      this.addLog('system', `SCANDAL ERUPTS: ${this.players[targetId].name} suffers a political meltdown!`);
+      this.players[targetId].reputation = Math.max(0, (this.players[targetId].reputation || 50) - 20);
+      this.players[targetId].exposure = 0;
+    } else {
+      this.addLog(attackerId, `Exposure op against ${this.players[targetId].name} (level ${this.players[targetId].exposure}/${CONFIG.SCANDAL_THRESHOLD}).`);
     }
-    for (const [res, amt] of Object.entries(tech.cost)) p.resources[res] -= amt;
-    p.techs.push(techId);
-    tech.apply(p);
-    this.techResearchedThisTurn++;
-    this.addLog(`${p.name} researched ${tech.name}!`, 'tech');
+  }
+
+  // ── Coalitions ────────────────────────────────────────────
+
+  getActiveCoalitions(playerId) {
+    return this.coalitions.filter(c => c.active && (c.p1 === playerId || c.p2 === playerId));
+  }
+
+  getPendingCoalitions(playerId) {
+    return this.coalitions.filter((c, i) => c.pending && c.p2 === playerId).map((c, _) => {
+      return { coalition: c, idx: this.coalitions.indexOf(c) };
+    });
+  }
+
+  proposeCoalition(type, proposerId, targetId) {
+    if (proposerId === targetId) return { ok: false, reason: 'Cannot ally with self.' };
+    if (this.areAllied(proposerId, targetId)) return { ok: false, reason: 'Coalition already exists.' };
+    const def = CONFIG.COALITION_TYPES[type];
+    this.players[proposerId].reputation = Math.max(0, (this.players[proposerId].reputation || 50) - def.repCost);
+    const c = new Coalition(type, proposerId, targetId, this.turn);
+    c.pending = true;
+    c.active  = false;
+    this.coalitions.push(c);
+    this.addLog(proposerId, `Proposed ${def.name} with ${this.players[targetId].name}.`);
+    return { ok: true, coalition: c };
+  }
+
+  acceptCoalition(coalitionIdx) {
+    const c = this.coalitions[coalitionIdx];
+    if (!c || !c.pending) return { ok: false };
+    c.pending = false;
+    c.active  = true;
+    this.addLog(c.p2, `Accepted ${CONFIG.COALITION_TYPES[c.type].name} with ${this.players[c.p1].name}.`);
     return { ok: true };
   }
 
-  // ── Diplomacy ─────────────────────────────────────────────
-
-  maxAgreements(playerId) {
-    return this.players[playerId].bonuses.maxAgreements || 2;
-  }
-
-  activeAgreementsFor(playerId) {
-    return this.agreements.filter(a => a.p1 === playerId || a.p2 === playerId);
-  }
-
-  proposeAgreement(fromId, toId, type) {
-    if (fromId === toId) return { ok: false, reason: 'Cannot propose to yourself.' };
-    if (!this.players[toId] || !this.players[toId].isAlive) return { ok: false, reason: 'Invalid player.' };
-    // Check existing
-    const existing = this.agreements.find(a =>
-      a.type === type && ((a.p1===fromId&&a.p2===toId)||(a.p1===toId&&a.p2===fromId))
-    );
-    if (existing) return { ok: false, reason: 'Agreement already exists.' };
-    if (this.activeAgreementsFor(fromId).length >= this.maxAgreements(fromId)) {
-      return { ok: false, reason: 'Agreement limit reached.' };
-    }
-    // Check for existing proposal
-    const dup = this.proposals.find(pr =>
-      pr.type === type && pr.from === fromId && pr.to === toId
-    );
-    if (dup) return { ok: false, reason: 'Proposal already pending.' };
-
-    this.proposals.push({ id: `prop_${Date.now()}_${Math.random()}`, type, from: fromId, to: toId });
-    this.addLog(`${this.players[fromId].name} proposes a ${CONFIG.AGREEMENTS[type].name} to ${this.players[toId].name}.`, 'diplomacy');
-    return { ok: true };
-  }
-
-  acceptAgreement(proposalId, acceptingId) {
-    const propIdx = this.proposals.findIndex(p => p.id === proposalId && p.to === acceptingId);
-    if (propIdx === -1) return { ok: false, reason: 'Proposal not found.' };
-    const prop = this.proposals[propIdx];
-    if (this.activeAgreementsFor(prop.from).length >= this.maxAgreements(prop.from)) {
-      this.proposals.splice(propIdx, 1);
-      return { ok: false, reason: `${this.players[prop.from].name} is at their agreement limit.` };
-    }
-    if (this.activeAgreementsFor(acceptingId).length >= this.maxAgreements(acceptingId)) {
-      return { ok: false, reason: 'You are at your agreement limit.' };
-    }
-
-    const config = CONFIG.AGREEMENTS[prop.type];
-    const agreement = {
-      id: `agr_${Date.now()}`,
-      type:   prop.type,
-      p1:     prop.from,
-      p2:     acceptingId,
-      turnsLeft: config.duration,
-      turnCreated: this.turn,
-    };
-    this.agreements.push(agreement);
-    this.proposals.splice(propIdx, 1);
-    this.addLog(`${this.players[prop.from].name} and ${this.players[acceptingId].name} signed a ${config.name}!`, 'diplomacy');
-    return { ok: true, agreement };
-  }
-
-  rejectProposal(proposalId, rejectingId) {
-    const idx = this.proposals.findIndex(p => p.id === proposalId && p.to === rejectingId);
-    if (idx === -1) return;
-    this.proposals.splice(idx, 1);
-  }
-
-  breakAgreementWith(breakerId, otherId) {
-    const idx = this.agreements.findIndex(a =>
-      (a.p1===breakerId&&a.p2===otherId)||(a.p1===otherId&&a.p2===breakerId)
-    );
-    if (idx !== -1) {
-      const a = this.agreements[idx];
-      const repLoss = CONFIG.AGREEMENTS[a.type].repLoss;
-      const p = this.players[breakerId];
-      const repActualLoss = p.bonuses.repProtection ? Math.floor(repLoss * 0.7) : repLoss;
-      p.reputation = Math.max(0, p.reputation - repActualLoss);
-      this.agreements.splice(idx, 1);
-      this.addLog(`${p.name} BROKE their ${CONFIG.AGREEMENTS[a.type].name} with ${this.players[otherId].name}! Rep -${repActualLoss}.`, 'betrayal');
-    }
-  }
-
-  breakAgreementById(playerId, agreementId) {
-    const a = this.agreements.find(ag => ag.id === agreementId);
-    if (!a) return { ok: false, reason: 'Agreement not found.' };
-    if (a.p1 !== playerId && a.p2 !== playerId) return { ok: false, reason: 'Not your agreement.' };
-    const otherId = a.p1 === playerId ? a.p2 : a.p1;
-    this.breakAgreementWith(playerId, otherId);
-    return { ok: true };
-  }
-
-  // ── Propaganda ────────────────────────────────────────────
-  usePropaganda(playerId, targetTerrKey) {
-    const p = this.players[playerId];
-    if (!p.bonuses.propaganda) return { ok: false, reason: 'No propaganda tech.' };
-    if ((p.bonuses.propagandaCooldown || 0) > 0) return { ok: false, reason: `Propaganda on cooldown (${p.bonuses.propagandaCooldown} turns).` };
-    const t = this.territories[targetTerrKey];
-    if (!t) return { ok: false, reason: 'Invalid territory.' };
-    // Must be adjacent to a territory you own
-    const isAdjacent = (this.adjacency[targetTerrKey] || []).some(nk => this.territories[nk].owner === playerId);
-    if (!isAdjacent) return { ok: false, reason: 'Must be adjacent to your territory.' };
-    const enemyUnit = t.units.find(u => u.owner !== playerId);
-    if (!enemyUnit) return { ok: false, reason: 'No enemy units to convert.' };
-    enemyUnit.owner = playerId;
-    p.bonuses.propagandaCooldown = 5;
-    this.addLog(`${p.name}'s propaganda converts an enemy unit in ${targetTerrKey}!`, 'diplomacy');
+  breakCoalition(coalitionIdx, breakerId) {
+    const c = this.coalitions[coalitionIdx];
+    if (!c || !c.active) return { ok: false };
+    c.active = false;
+    const def = CONFIG.COALITION_TYPES[c.type];
+    const repHit = this.players[breakerId]?.policies?.has('UNITY_PLEDGE') ? def.repCost + 15 : def.repCost;
+    this.players[breakerId].reputation = Math.max(0, (this.players[breakerId].reputation || 50) - repHit);
+    const otherId = c.p1 === breakerId ? c.p2 : c.p1;
+    this.addLog(breakerId, `BETRAYED coalition with ${this.players[otherId].name}. Rep -${repHit}.`);
     return { ok: true };
   }
 
   // ── Victory Check ─────────────────────────────────────────
 
   checkVictory() {
-    const totalPassable = Object.values(this.territories)
-      .filter(t => CONFIG.TERRAINS[t.terrain].passable).length;
-
     for (const p of this.players) {
-      if (!p.isAlive) continue;
-      const myTerr = this.getPlayerTerritories(p.id);
-      const myPassable = myTerr.filter(t => CONFIG.TERRAINS[t.terrain].passable).length;
-
-      // Military victory: 55% of passable territories
-      if (myPassable / totalPassable >= 0.55) {
-        return { playerId: p.id, type: 'MILITARY', desc: 'Military Domination' };
+      if (!p.alive) continue;
+      if (this.getEV(p.id) >= CONFIG.EV_WIN) {
+        this.winner = p.id;
+        this.winType = 'Electoral Domination (270+ EV)';
+        return true;
       }
-
-      // Economic victory: 400+ gold AND 2+ cities
-      const myCities = myTerr.filter(t => t.terrain === 'CITY' || t.terrain === 'CAPITAL').length;
-      if (p.resources.gold >= 400 && myCities >= 2) {
-        return { playerId: p.id, type: 'ECONOMIC', desc: 'Economic Supremacy' };
+      if (p.resources.funds >= 500 && this._ownedStates(p.id).length >= 3) {
+        this.winner = p.id;
+        this.winType = 'Economic Capture';
+        return true;
       }
-
-      // Knowledge victory: 8+ techs (or effective count with bonus)
-      const effectiveTechs = p.techs.length + (p.bonuses.extraTechs || 0);
-      if (effectiveTechs >= 8) {
-        return { playerId: p.id, type: 'KNOWLEDGE', desc: 'Enlightenment Victory' };
+      if (p.policies.size >= 8) {
+        this.winner = p.id;
+        this.winType = 'Policy Supremacy';
+        return true;
       }
     }
-
-    // Diplomatic victory: have alliances covering >50% of remaining players, AND have most territory among allied group
-    for (const p of this.players) {
-      if (!p.isAlive) continue;
-      const alliedPlayerIds = new Set([p.id]);
-      for (const a of this.agreements.filter(ag => ag.type === 'ALLIANCE')) {
-        if (a.p1 === p.id) alliedPlayerIds.add(a.p2);
-        if (a.p2 === p.id) alliedPlayerIds.add(a.p1);
-      }
-      const alivePlayers = this.players.filter(pl => pl.isAlive).length;
-      if (alliedPlayerIds.size / alivePlayers > 0.5) {
-        const myTerr = this.getPlayerTerritories(p.id).length;
-        const maxAllyTerr = Math.max(...[...alliedPlayerIds].map(id => this.getPlayerTerritories(id).length));
-        if (myTerr === maxAllyTerr) {
-          return { playerId: p.id, type: 'DIPLOMATIC', desc: 'Diplomatic Hegemony' };
-        }
-      }
-    }
-
-    // Last player standing
-    const alive = this.players.filter(p => p.isAlive);
+    const alive = this.players.filter(p => p.alive);
     if (alive.length === 1) {
-      return { playerId: alive[0].id, type: 'SURVIVAL', desc: 'Last Standing' };
+      this.winner = alive[0].id;
+      this.winType = 'Last Faction Standing';
+      return true;
     }
-
-    // Turn limit
     if (this.turn > CONFIG.MAX_TURNS) {
-      const scores = this.players
-        .filter(p => p.isAlive)
-        .map(p => ({
-          id: p.id,
-          score: this.getPlayerTerritories(p.id).length * 2 + p.resources.gold / 20 + p.techs.length * 3,
-        }))
-        .sort((a, b) => b.score - a.score);
-      return { playerId: scores[0].id, type: 'SCORE', desc: 'Score Victory (Turn Limit)' };
+      const best = alive.sort((a, b) => this.getEV(b.id) - this.getEV(a.id))[0];
+      this.winner = best.id;
+      this.winType = 'Electoral Lead (Time Limit)';
+      return true;
     }
-
-    return null;
+    return false;
   }
 
-  // ── Turn Management ───────────────────────────────────────
+  // ── Turn / Phase ──────────────────────────────────────────
 
-  startPlayerTurn() {
-    this.techResearchedThisTurn = 0;
-    this.phase = 'DIPLOMACY';
-    const p = this.players[this.currentPIdx];
-    if (!p || !p.isAlive) { this.endPlayerTurn(); return; }
-
-    const income = this.collectResources(this.currentPIdx);
-
-    // Tick agreements
-    if (this.currentPIdx === 0) {
-      for (let i = this.agreements.length - 1; i >= 0; i--) {
-        const a = this.agreements[i];
-        if (a.turnsLeft > 0) {
-          a.turnsLeft--;
-          if (a.turnsLeft === 0) {
-            this.addLog(`The ${CONFIG.AGREEMENTS[a.type].name} between ${this.players[a.p1].name} and ${this.players[a.p2].name} has expired.`, 'diplomacy');
-            this.agreements.splice(i, 1);
-          }
-        }
-      }
-      // Tick propaganda cooldowns
-      for (const pl of this.players) {
-        if (pl.bonuses.propagandaCooldown > 0) pl.bonuses.propagandaCooldown--;
+  startPlayerTurn(playerId) {
+    this.collectResources(playerId);
+    for (const t of Object.values(this.territories)) {
+      for (const op of t.ops) {
+        if (op.owner === playerId) op.moved = false;
       }
     }
-
-    const v = this.checkVictory();
-    if (v) { this.victory = v; return; }
+    for (const c of this.coalitions) {
+      if (!c.active) continue;
+      if (c.duration > 0 && (this.turn - c.turnMade) >= c.duration) {
+        c.active = false;
+        this.addLog('system', `Coalition between ${this.players[c.p1].name} & ${this.players[c.p2].name} expired.`);
+      }
+    }
+    if (this.players[playerId]?.policies?.has('SUPERDELEGATE')) {
+      const partners = this.getActiveCoalitions(playerId).length;
+      this.players[playerId].resources.capital = (this.players[playerId].resources.capital || 0) + partners * 5;
+    }
   }
 
   advancePhase() {
-    if (this.phase === 'DIPLOMACY') { this.phase = 'BUILD'; return; }
-    if (this.phase === 'BUILD')     { this.phase = 'MOVE';  return; }
-    if (this.phase === 'MOVE')      { this.endPlayerTurn(); return; }
+    const phases = ['DIPLOMACY', 'BUILD', 'MARCH'];
+    const idx = phases.indexOf(this.phase);
+    if (idx < phases.length - 1) {
+      this.phase = phases[idx + 1];
+      return false;
+    } else {
+      this.phase = phases[0];
+      return true;
+    }
   }
 
   endPlayerTurn() {
-    // Move to next living player
-    let nextIdx = (this.currentPIdx + 1) % this.players.length;
-    let loops = 0;
-    while (!this.players[nextIdx].isAlive) {
-      nextIdx = (nextIdx + 1) % this.players.length;
-      if (++loops > this.players.length) break;
-    }
-    if (nextIdx <= this.currentPIdx) this.turn++;
-    this.currentPIdx = nextIdx;
-    this.startPlayerTurn();
+    const turnAdvanced = this.advancePhase();
+    if (!turnAdvanced) return;
+
+    let next    = this.currentPIdx;
+    let checked = 0;
+    do {
+      next = (next + 1) % this.players.length;
+      checked++;
+      if (checked > this.players.length) break;
+    } while (!this.players[next].alive);
+
+    if (next <= this.currentPIdx) this.turn++;
+    this.currentPIdx = next;
+    this.startPlayerTurn(next);
   }
 
-  addLog(msg, type = 'info') {
-    this.log.unshift({ msg, type, turn: this.turn });
-    if (this.log.length > 80) this.log.pop();
+  addLog(src, msg) {
+    const name = src === 'system'
+      ? '🔔 System'
+      : (src !== null && src !== undefined && this.players[src])
+        ? `[${this.players[src].name}]`
+        : '?';
+    this.log.unshift({ turn: this.turn, src: name, msg });
+    if (this.log.length > 100) this.log.pop();
   }
 
-  // ── Serialize for AI ──────────────────────────────────────
-  getSnapshot() {
-    return {
-      turn: this.turn,
-      players: this.players.map(p => ({
-        id: p.id, name: p.name, isAlive: p.isAlive, reputation: p.reputation,
-        resources: { ...p.resources }, techs: [...p.techs], bonuses: { ...p.bonuses },
-        terrCount: this.getPlayerTerritories(p.id).length,
-        unitCount: this.getPlayerUnits(p.id).length,
-      })),
-      agreements: this.agreements.map(a => ({ ...a })),
-    };
+  getScore(playerId) {
+    const p = this.players[playerId];
+    return this.getEV(playerId) * 10
+      + this._ownedStates(playerId).length * 5
+      + p.policies.size * 8
+      + Math.floor((p.resources.funds || 0) / 10)
+      + (p.reputation || 0);
   }
 }

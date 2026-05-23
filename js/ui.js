@@ -1,582 +1,282 @@
 'use strict';
 
 // ============================================================
-// GRAND DOMINION — UI Controller
-// Wires together game state, renderer, AI, and HTML
+// THE REPUBLIC — UI Controller
 // ============================================================
 
 class UIController {
   constructor() {
-    this.gs       = new GameState();
-    this.renderer = null;
-    this.aiPlayers = {};
-    this.selectedUnits   = [];  // unit ids chosen for move
-    this.awaitingMove    = false;
-    this.aiThinking      = false;
+    this.gs          = null;
+    this.renderer    = null;
+    this.aiPlayers   = {};
+    this.aiRunning   = false;
+    this.awaitingMove = false;
+    this.selectedAbbr = null;
+    this.selectedOps  = [];
 
-    this._initSetupScreen();
+    this._setupScreen();
+    this._loop();
   }
 
   // ── Setup Screen ──────────────────────────────────────────
 
-  _initSetupScreen() {
-    const countBtns = document.querySelectorAll('.btn-player-count');
-    countBtns.forEach(btn => {
+  _setupScreen() {
+    const group = document.getElementById('player-count-group');
+    const list  = document.getElementById('player-list');
+
+    let numPlayers = 4;
+
+    const factionKeys = Object.keys(CONFIG.FACTIONS);
+    const personalities = Object.keys(CONFIG.AI_PERSONALITIES);
+
+    const renderList = () => {
+      list.innerHTML = '';
+      for (let i = 0; i < numPlayers; i++) {
+        const factionKey = factionKeys[i % factionKeys.length];
+        const faction    = CONFIG.FACTIONS[factionKey];
+        const row = document.createElement('div');
+        row.className = 'player-config-row';
+        row.innerHTML = `
+          <div class="player-swatch" style="background:${faction.color.primary};border-color:${faction.color.light}"></div>
+          <input class="player-name-input" data-idx="${i}" value="${faction.name}" placeholder="Faction name">
+          <select class="player-faction-select" data-idx="${i}">
+            ${factionKeys.map(k => `<option value="${k}" ${k === factionKey ? 'selected' : ''}>${CONFIG.FACTIONS[k].name}</option>`).join('')}
+          </select>
+          <label class="ai-label">
+            <input type="checkbox" class="ai-check" data-idx="${i}" ${i > 0 ? 'checked' : ''}> AI
+          </label>
+          <select class="ai-personality-select" data-idx="${i}" ${i === 0 ? 'disabled' : ''}>
+            ${personalities.map(k => `<option value="${k}">${k}</option>`).join('')}
+          </select>
+        `;
+        list.appendChild(row);
+
+        // Update swatch when faction changes
+        row.querySelector('.player-faction-select').addEventListener('change', (e) => {
+          const fk = e.target.value;
+          const sw = row.querySelector('.player-swatch');
+          sw.style.background   = CONFIG.FACTIONS[fk].color.primary;
+          sw.style.borderColor  = CONFIG.FACTIONS[fk].color.light;
+          row.querySelector('.player-name-input').value = CONFIG.FACTIONS[fk].name;
+        });
+
+        // Toggle AI select
+        row.querySelector('.ai-check').addEventListener('change', (e) => {
+          row.querySelector('.ai-personality-select').disabled = !e.target.checked;
+        });
+      }
+    };
+
+    group.querySelectorAll('.btn-player-count').forEach(btn => {
       btn.addEventListener('click', () => {
-        countBtns.forEach(b => b.classList.remove('active'));
+        group.querySelectorAll('.btn-player-count').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        this._renderPlayerList(parseInt(btn.dataset.count));
+        numPlayers = parseInt(btn.dataset.count);
+        renderList();
       });
     });
-    this._renderPlayerList(4);
 
-    document.getElementById('btn-start-game').addEventListener('click', () => this._startGame());
+    renderList();
+
+    document.getElementById('btn-start-game').addEventListener('click', () => {
+      const configs = [];
+      document.querySelectorAll('.player-config-row').forEach((row, i) => {
+        configs.push({
+          name:          row.querySelector('.player-name-input').value.trim() || `Faction ${i + 1}`,
+          faction:       row.querySelector('.player-faction-select').value,
+          isAI:          row.querySelector('.ai-check').checked,
+          aiPersonality: row.querySelector('.ai-personality-select').value,
+        });
+      });
+      this._startGame(configs);
+    });
   }
 
-  _renderPlayerList(count) {
-    const list = document.getElementById('player-list');
-    list.innerHTML = '';
-    for (let i = 0; i < count; i++) {
-      const color = CONFIG.PLAYER_COLORS[i];
-      const div   = document.createElement('div');
-      div.className = 'player-entry';
-      div.innerHTML = `
-        <div class="player-color-dot" style="background:${color.primary}"></div>
-        <input class="player-name-input" data-idx="${i}" type="text" value="${color.name}" maxlength="24" placeholder="Player name"/>
-        <select class="player-type-select" data-idx="${i}">
-          <option value="human">Human</option>
-          <option value="ai_CONQUEROR">AI: The Conqueror</option>
-          <option value="ai_MERCHANT">AI: The Merchant</option>
-          <option value="ai_SCHOLAR">AI: The Scholar</option>
-          <option value="ai_DIPLOMAT">AI: The Diplomat</option>
-          <option value="ai_OPPORTUNIST">AI: The Opportunist</option>
-        </select>
-      `;
-      // Default: first player is Human, rest AI
-      if (i > 0) div.querySelector('select').value = 'ai_OPPORTUNIST';
-      list.appendChild(div);
-    }
-  }
+  _startGame(playerConfigs) {
+    this.gs = new GameState();
+    this.gs.init(playerConfigs);
 
-  _startGame() {
-    const entries = document.querySelectorAll('.player-entry');
-    const configs = [];
-    entries.forEach((e, i) => {
-      const name      = e.querySelector('.player-name-input').value.trim() || CONFIG.PLAYER_COLORS[i].name;
-      const typeVal   = e.querySelector('.player-type-select').value;
-      const isAI      = typeVal.startsWith('ai_');
-      const personality = isAI ? typeVal.replace('ai_', '') : 'OPPORTUNIST';
-      configs.push({ name, isAI, personality });
-    });
-
-    const numPlayers = configs.length;
-
-    // Init game
-    this.gs.init(numPlayers, configs);
-
-    // Create AI players
-    this.aiPlayers = {};
-    configs.forEach((cfg, i) => {
-      if (cfg.isAI) this.aiPlayers[i] = new AIPlayer(i, cfg.personality);
-    });
-
-    // Setup canvas
     const canvas = document.getElementById('game-canvas');
-    canvas.width  = 800;
-    canvas.height = 660;
+    canvas.width  = CONFIG.MAP_COLS * CONFIG.CELL_W + 20;
+    canvas.height = CONFIG.MAP_ROWS * CONFIG.CELL_H + 20 + 46; // +46 for EV bar
+
     this.renderer = new Renderer(canvas);
     this.renderer.setGameState(this.gs);
 
-    // Bind canvas events
-    canvas.addEventListener('click', (e) => this._onCanvasClick(e));
+    this.aiPlayers = {};
+    for (const p of this.gs.players) {
+      if (p.isAI) {
+        this.aiPlayers[p.id] = new AIPlayer(p.id, p.aiPersonality);
+      }
+    }
 
-    // Bind button events
-    document.getElementById('btn-end-phase').addEventListener('click', () => this._endPhase());
-    document.getElementById('btn-diplomacy').addEventListener('click', () => this._openDiplomacyModal());
-    document.getElementById('btn-tech').addEventListener('click', () => this._openTechModal());
-    document.getElementById('btn-build-unit').addEventListener('click', () => this._openBuildModal());
-    document.getElementById('btn-fortify').addEventListener('click', () => this._fortifySelected());
-    document.getElementById('btn-move-units').addEventListener('click', () => this._startMoveMode());
-    document.getElementById('btn-cancel-move').addEventListener('click', () => this._cancelMove());
-    document.querySelectorAll('.modal-close').forEach(btn => {
-      btn.addEventListener('click', () => this._closeModals());
-    });
-
-    // Switch screens
     document.getElementById('setup-screen').classList.add('hidden');
     document.getElementById('game-screen').classList.remove('hidden');
 
+    this._bindGameEvents(canvas);
     this._updateUI();
-    this._loop();
 
-    // Start AI turn if current player is AI
-    this._maybeDoAITurn();
-  }
-
-  // ── Game Loop ─────────────────────────────────────────────
-
-  _loop() {
-    this.renderer.draw();
-    requestAnimationFrame(() => this._loop());
-  }
-
-  // ── AI Turn ───────────────────────────────────────────────
-
-  async _maybeDoAITurn() {
-    if (this.gs.victory) { this._showVictory(); return; }
-    const pidx = this.gs.currentPIdx;
-    const p    = this.gs.players[pidx];
-    if (!p || !p.isAlive) { this.gs.endPlayerTurn(); this._maybeDoAITurn(); return; }
-    if (!p.isAI) return; // Human turn
-
-    this.aiThinking = true;
-    this._updateUI();
-    document.getElementById('btn-end-phase').disabled = true;
-
-    const ai = this.aiPlayers[pidx];
-    if (!ai) {
-      this.gs.endPlayerTurn();
-      this.aiThinking = false;
-      this._afterTurn();
-      return;
+    if (this.gs.players[this.gs.currentPIdx].isAI) {
+      this._maybeDoAITurn();
     }
+  }
 
-    await new Promise(r => setTimeout(r, CONFIG.AI_TURN_DELAY_MS));
-    await ai.takeTurn(this.gs, (action, data) => {
-      this._addLogEntry(this.gs.log[0]);
-      this._updateUI();
+  _bindGameEvents(canvas) {
+    canvas.addEventListener('click', (e) => this._onCanvasClick(e));
+
+    document.getElementById('btn-end-phase').addEventListener('click', () => this._endPhase());
+    document.getElementById('btn-diplomacy').addEventListener('click', () => this._openDiplomacy());
+    document.getElementById('btn-build-unit').addEventListener('click', () => this._openDeploy());
+    document.getElementById('btn-fortify').addEventListener('click', () => this._doEntrench());
+    document.getElementById('btn-tech').addEventListener('click', () => this._openResearch());
+    document.getElementById('btn-move-units').addEventListener('click', () => this._enterMoveMode());
+    document.getElementById('btn-cancel-move').addEventListener('click', () => this._cancelMove());
+
+    document.querySelectorAll('.modal-close').forEach(btn => {
+      btn.addEventListener('click', () => this._closeModals());
     });
-
-    // Advance past this AI player's turn
-    this.gs.endPlayerTurn();
-    this.aiThinking = false;
-    this._afterTurn();
-  }
-
-  _afterTurn() {
-    if (this.gs.victory) { this._showVictory(); return; }
-    this._updateUI();
-    document.getElementById('btn-end-phase').disabled = false;
-    this.renderer.clearSelection();
-    this.selectedUnits = [];
-    this.awaitingMove  = false;
-    this._maybeDoAITurn();
-  }
-
-  // ── Phase Management ──────────────────────────────────────
-
-  _endPhase() {
-    if (this.aiThinking) return;
-    const prevPIdx = this.gs.currentPIdx;
-    this.gs.advancePhase();
-    this.renderer.clearSelection();
-    this.selectedUnits = [];
-    this.awaitingMove  = false;
-    // If the player advanced (turn ended) or victory triggered, run afterTurn
-    if (this.gs.currentPIdx !== prevPIdx || this.gs.victory) {
-      this._afterTurn();
-    } else {
-      this._updateUI();
-    }
+    document.getElementById('modal-overlay').addEventListener('click', () => this._closeModals());
+    document.getElementById('btn-new-game').addEventListener('click', () => {
+      document.getElementById('victory-screen').classList.add('hidden');
+      document.getElementById('setup-screen').classList.remove('hidden');
+    });
   }
 
   // ── Canvas Click ──────────────────────────────────────────
-  // Two-click flow: 1st click selects + shows range; 2nd click executes.
 
   _onCanvasClick(e) {
-    if (this.aiThinking) return;
-    const rect  = this.renderer.canvas.getBoundingClientRect();
-    const px    = e.clientX - rect.left;
-    const py    = e.clientY - rect.top;
-    const hex   = Hex.fromPixel(px - this.renderer.camera.x, py - this.renderer.camera.y, CONFIG.HEX_SIZE);
-    const key   = Hex.key(hex.q, hex.r);
-    const t     = this.gs.territories[key];
-    if (!t) { this.renderer.clearSelection(); this.awaitingMove = false; this._updateUI(); return; }
+    if (!this.gs || this.aiRunning) return;
+    const pidx = this.gs.currentPIdx;
+    if (this.gs.players[pidx].isAI) return;
 
-    const pidx  = this.gs.currentPIdx;
-    const phase = this.gs.phase;
+    const rect = this.renderer.canvas.getBoundingClientRect();
+    const px   = e.clientX - rect.left;
+    const py   = e.clientY - rect.top;
+    const abbr = this.renderer._pixelToState(px, py);
+    if (!abbr) return;
+
+    const t = this.gs.territories[abbr];
 
     if (this.awaitingMove) {
-      // Re-select a different territory to move from
-      if (t.owner === pidx && t.units.filter(u => u.owner === pidx).length > 0
-          && !this.renderer.moveable.has(key) && !this.renderer.attackable.has(key)) {
-        this._selectTerritoryForMove(key, t, pidx);
-        this._updateUI();
+      if (abbr === this.selectedAbbr) {
+        this._cancelMove();
         return;
       }
-      // Execute move to highlighted destination
-      if (this.renderer.moveable.has(key) || this.renderer.attackable.has(key)) {
-        this._executeMove(key);
+      if (this.renderer.moveable.has(abbr) || this.renderer.attackable.has(abbr)) {
+        const result = this.gs.moveOps(this.selectedAbbr, abbr, pidx, this.selectedOps);
+        if (result.ok) {
+          this._showCombatToast(result.captured
+            ? `Seized ${abbr}! [${result.atkStr} vs ${result.defStr}]`
+            : result.atkStr !== undefined
+              ? `Repelled from ${abbr}. [${result.atkStr} vs ${result.defStr}]`
+              : `Moved to ${abbr}.`
+          );
+          if (this.gs.checkVictory()) { this._showVictory(); return; }
+        }
+        this._cancelMove();
       } else {
-        this.renderer.clearSelection();
-        this.awaitingMove  = false;
-        this.selectedUnits = [];
-        this._updateUI();
+        // Click a different owned state to re-select
+        if (t.owner === pidx) {
+          this._selectStateForMove(abbr, t, pidx);
+        }
       }
+    } else {
+      // Normal click — show territory info
+      this.renderer.selectTerritory(abbr);
+      this._showTerritoryPanel(abbr);
+    }
+
+    this._updateUI();
+  }
+
+  _selectStateForMove(abbr, t, pidx) {
+    const myOps = t.ops.filter(op => op.owner === pidx && !op.moved);
+    if (myOps.length === 0) {
+      this._setStatus('No available ops in this state.');
       return;
     }
-
-    // First click: select and inspect territory
-    this.renderer.selectTerritory(key);
-    this.selectedUnits = [];
-    this._updateTerritoryPanel(t);
-
-    if (phase === 'MOVE' && t.owner === pidx) {
-      this._selectTerritoryForMove(key, t, pidx);
-    }
-    this._updateUI();
-  }
-
-  _selectTerritoryForMove(key, t, pidx) {
-    const myUnits = t.units.filter(u => u.owner === pidx);
-    if (myUnits.length === 0) return;
-    this.selectedUnits = myUnits.map(u => u.id);
-    const types = [...new Set(myUnits.map(u => u.type))];
-    this.renderer.showMoveRange(key, types, pidx);
+    this.selectedAbbr = abbr;
+    this.selectedOps  = [...new Set(myOps.map(op => op.type))];
     this.awaitingMove = true;
-  }
-
-  _startMoveMode() {
-    if (!this.renderer.selected) return;
-    const t = this.gs.territories[this.renderer.selected];
-    if (!t || t.owner !== this.gs.currentPIdx) return;
-    this._selectTerritoryForMove(this.renderer.selected, t, this.gs.currentPIdx);
-    this._updateUI();
+    this.renderer.showMoveRange(abbr, this.selectedOps, pidx);
+    document.getElementById('btn-cancel-move').classList.remove('hidden');
+    this._setStatus(`Select destination for ops in ${abbr}. Yellow = selectable. Red = hostile.`);
   }
 
   _cancelMove() {
+    this.awaitingMove = false;
+    this.selectedAbbr = null;
+    this.selectedOps  = [];
     this.renderer.clearSelection();
-    this.awaitingMove  = false;
-    this.selectedUnits = [];
+    document.getElementById('btn-cancel-move').classList.add('hidden');
+    this._setStatus('');
+  }
+
+  _enterMoveMode() {
+    const pidx = this.gs.currentPIdx;
+    if (this.gs.phase !== 'MARCH') {
+      this._setStatus('Move/Attack is only available in the March phase.');
+      return;
+    }
+    this._setStatus('Click one of your states to select ops for movement.');
+    this._setStatus('Click a state with your ops to begin movement.');
+  }
+
+  // ── Phase / Turn ──────────────────────────────────────────
+
+  _endPhase() {
+    if (!this.gs || this.aiRunning) return;
+    const pidx = this.gs.currentPIdx;
+    if (this.gs.players[pidx].isAI) return;
+
+    this._cancelMove();
+    const prevPIdx = this.gs.currentPIdx;
+    this.gs.endPlayerTurn();
+
+    if (this.gs.checkVictory()) { this._showVictory(); return; }
+
+    this._afterTurn(prevPIdx);
+  }
+
+  _afterTurn(prevPIdx) {
     this._updateUI();
+    const pidx = this.gs.currentPIdx;
+    if (this.gs.players[pidx].isAI) {
+      setTimeout(() => this._maybeDoAITurn(), 300);
+    }
   }
 
-  _executeMove(toKey) {
-    const fromKey = this.renderer.selected;
-    if (!fromKey || this.selectedUnits.length === 0) return;
-
-    const result = this.gs.moveUnits(this.gs.currentPIdx, fromKey, toKey, this.selectedUnits);
-    this.renderer.clearSelection();
-    this.awaitingMove  = false;
-    this.selectedUnits = [];
-
-    if (result.combat) {
-      this._showCombatResult(result);
-    }
-    this._addLogEntry(this.gs.log[0]);
-    this._updateUI();
-
-    if (this.gs.victory) this._showVictory();
-  }
-
-  _showCombatResult(result) {
-    const toast = document.getElementById('combat-toast');
-    const cls   = result.attWon ? 'win' : 'loss';
-    toast.className = `combat-toast ${cls}`;
-    toast.textContent = result.attWon
-      ? `⚔ VICTORY! ATK ${result.atkStr} vs DEF ${result.defStr}. Losses: ${result.atkLoss}`
-      : `🛡 REPELLED. ATK ${result.atkStr} vs DEF ${result.defStr}. Lost ${result.atkLoss} units.`;
-    toast.classList.remove('hidden');
-    clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => toast.classList.add('hidden'), 3000);
-  }
-
-  // ── Fortify ───────────────────────────────────────────────
-
-  _fortifySelected() {
-    const key = this.renderer.selected;
-    if (!key) { this._showStatus('Select a territory first.'); return; }
-    const result = this.gs.buildFortification(this.gs.currentPIdx, key);
-    if (!result.ok) { this._showStatus(result.reason); return; }
-    this._updateUI();
-    this._addLogEntry(this.gs.log[0]);
-  }
-
-  // ── Build Modal ───────────────────────────────────────────
-
-  _openBuildModal() {
-    const key = this.renderer.selected;
-    if (!key) { this._showStatus('Select a territory first.'); return; }
-    const t = this.gs.territories[key];
-    if (!t || t.owner !== this.gs.currentPIdx) { this._showStatus('Select YOUR territory.'); return; }
-
-    const modal   = document.getElementById('build-modal');
-    const content = document.getElementById('build-content');
-    const p       = this.gs.players[this.gs.currentPIdx];
-    content.innerHTML = '';
-
-    for (const [typeId, unit] of Object.entries(CONFIG.UNITS)) {
-      const canAfford = Object.entries(unit.cost).every(([res, amt]) => (p.resources[res] || 0) >= amt);
-      const costStr   = Object.entries(unit.cost).map(([r,v]) => `${v} ${r}`).join(', ');
-      const div       = document.createElement('div');
-      div.className   = `build-option${canAfford ? '' : ' unaffordable'}`;
-      div.innerHTML   = `
-        <div class="build-icon" style="color:${unit.color}">${unit.icon}</div>
-        <div class="build-info">
-          <div class="build-name">${unit.name}</div>
-          <div class="build-stats">ATK ${unit.attack} | DEF ${unit.defense} | MOV ${unit.move}</div>
-          <div class="build-desc">${unit.desc}</div>
-          <div class="build-cost">${costStr}</div>
-        </div>
-        <button class="btn-build-confirm${canAfford ? '' : ' disabled'}" data-type="${typeId}" data-key="${key}">
-          ${canAfford ? 'Train' : 'Can\'t Afford'}
-        </button>
-      `;
-      content.appendChild(div);
+  async _maybeDoAITurn() {
+    if (this.aiRunning) return;
+    const pidx = this.gs.currentPIdx;
+    const p    = this.gs.players[pidx];
+    if (!p.isAI || !p.alive) {
+      this.gs.endPlayerTurn();
+      this._afterTurn(pidx);
+      return;
     }
 
-    content.querySelectorAll('.btn-build-confirm:not(.disabled)').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const result = this.gs.buildUnit(this.gs.currentPIdx, btn.dataset.key, btn.dataset.type);
-        if (result.ok) {
-          this._closeModals();
-          this._updateUI();
-          this._addLogEntry(this.gs.log[0]);
-        } else {
-          this._showStatus(result.reason);
-        }
-      });
-    });
+    this.aiRunning = true;
+    this._setStatus(`${p.name} is deliberating...`);
 
-    modal.classList.remove('hidden');
-  }
-
-  // ── Tech Modal ────────────────────────────────────────────
-
-  _openTechModal() {
-    const modal   = document.getElementById('tech-modal');
-    const content = document.getElementById('tech-content');
-    const p       = this.gs.players[this.gs.currentPIdx];
-    content.innerHTML = '';
-
-    const branches = { military: '⚔ Military', economy: '💰 Economy', knowledge: '📚 Knowledge', diplomacy: '🤝 Diplomacy' };
-
-    for (const [branchId, branchName] of Object.entries(branches)) {
-      const section = document.createElement('div');
-      section.className = 'tech-branch';
-      section.innerHTML = `<h3 class="tech-branch-title">${branchName}</h3>`;
-
-      const branchTechs = Object.entries(CONFIG.TECHS)
-        .filter(([,t]) => t.branch === branchId)
-        .sort((a,b) => a[1].tier - b[1].tier);
-
-      for (const [techId, tech] of branchTechs) {
-        const owned    = p.techs.includes(techId);
-        const canRes   = this.gs.canResearch(this.gs.currentPIdx, techId);
-        const costStr  = Object.entries(tech.cost).map(([r,v]) => `${v} ${r}`).join(', ');
-        const reqMet   = tech.requires.every(r => p.techs.includes(r));
-
-        const item = document.createElement('div');
-        item.className = `tech-item tier-${tech.tier} ${owned ? 'owned' : (canRes ? 'available' : 'locked')}`;
-        item.innerHTML = `
-          <div class="tech-icon">${tech.icon}</div>
-          <div class="tech-info">
-            <div class="tech-name">${tech.name} ${owned ? '✓' : ''}</div>
-            <div class="tech-effect">${tech.effect}</div>
-            <div class="tech-cost">${owned ? 'Researched' : costStr}</div>
-            ${!reqMet ? `<div class="tech-req">Requires: ${tech.requires.join(', ')}</div>` : ''}
-          </div>
-          ${canRes ? `<button class="btn-research" data-tech="${techId}">Research</button>` : ''}
-        `;
-        section.appendChild(item);
-      }
-
-      content.appendChild(section);
-    }
-
-    content.querySelectorAll('.btn-research').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const result = this.gs.researchTech(this.gs.currentPIdx, btn.dataset.tech);
-        if (result.ok) {
-          this._openTechModal(); // refresh
-          this._updateUI();
-          this._addLogEntry(this.gs.log[0]);
-        } else {
-          this._showStatus(result.reason);
-        }
-      });
-    });
-
-    modal.classList.remove('hidden');
-  }
-
-  // ── Diplomacy Modal ───────────────────────────────────────
-
-  _openDiplomacyModal() {
-    const modal   = document.getElementById('diplomacy-modal');
-    const content = document.getElementById('diplomacy-content');
-    const myId    = this.gs.currentPIdx;
-    const p       = this.gs.players[myId];
-    content.innerHTML = '';
-
-    // Active agreements
-    const myAgreements = this.gs.agreements.filter(a => a.p1 === myId || a.p2 === myId);
-    if (myAgreements.length > 0) {
-      const section = document.createElement('div');
-      section.innerHTML = '<h3 class="diplo-section-title">Active Agreements</h3>';
-      for (const a of myAgreements) {
-        const otherId = a.p1 === myId ? a.p2 : a.p1;
-        const other   = this.gs.players[otherId];
-        const aCfg    = CONFIG.AGREEMENTS[a.type];
-        const div     = document.createElement('div');
-        div.className = 'agreement-item';
-        div.innerHTML = `
-          <span class="agr-icon">${aCfg.icon}</span>
-          <span class="agr-info">
-            <b>${aCfg.name}</b> with <span style="color:${other.color.primary}">${other.name}</span>
-            ${a.turnsLeft > 0 ? `(${a.turnsLeft} turns left)` : '(Indefinite)'}
-          </span>
-          <button class="btn-break-agr btn-danger" data-id="${a.id}">Break</button>
-        `;
-        section.appendChild(div);
-      }
-      content.appendChild(section);
-    }
-
-    // Incoming proposals
-    const incoming = this.gs.proposals.filter(pr => pr.to === myId);
-    if (incoming.length > 0) {
-      const section = document.createElement('div');
-      section.innerHTML = '<h3 class="diplo-section-title">Incoming Proposals</h3>';
-      for (const pr of incoming) {
-        const from  = this.gs.players[pr.from];
-        const aCfg  = CONFIG.AGREEMENTS[pr.type];
-        const div   = document.createElement('div');
-        div.className = 'proposal-item';
-        div.innerHTML = `
-          <span class="agr-icon">${aCfg.icon}</span>
-          <span class="agr-info">
-            <b>${aCfg.name}</b> from <span style="color:${from.color.primary}">${from.name}</span>
-            <br><small>${aCfg.desc}</small>
-          </span>
-          <button class="btn-accept-prop btn-success" data-id="${pr.id}">Accept</button>
-          <button class="btn-reject-prop btn-secondary" data-id="${pr.id}">Reject</button>
-        `;
-        section.appendChild(div);
-      }
-      content.appendChild(section);
-    }
-
-    // Propose new agreement
-    const section2 = document.createElement('div');
-    section2.innerHTML = '<h3 class="diplo-section-title">Propose Agreement</h3>';
-    const others = this.gs.players.filter(pl => pl.isAlive && pl.id !== myId);
-
-    const propForm = document.createElement('div');
-    propForm.className = 'propose-form';
-    propForm.innerHTML = `
-      <select id="prop-target">
-        ${others.map(o => `<option value="${o.id}" style="background:#0d1117">${o.name} (Rep: ${o.reputation})</option>`).join('')}
-      </select>
-      <select id="prop-type">
-        ${Object.entries(CONFIG.AGREEMENTS).map(([id, a]) => `<option value="${id}">${a.icon} ${a.name}</option>`).join('')}
-      </select>
-      <button id="btn-propose-send" class="btn-primary">Propose</button>
-    `;
-    section2.appendChild(propForm);
-    content.appendChild(section2);
-
-    // Reputation display for all players
-    const section3 = document.createElement('div');
-    section3.innerHTML = '<h3 class="diplo-section-title">Reputations</h3>';
-    const repGrid = document.createElement('div');
-    repGrid.className = 'rep-grid';
-    for (const pl of this.gs.players) {
-      const div = document.createElement('div');
-      div.className = 'rep-item';
-      const repColor = pl.reputation >= 70 ? '#22c55e' : pl.reputation >= 40 ? '#f59e0b' : '#ef4444';
-      div.innerHTML = `
-        <span class="rep-name" style="color:${pl.color.primary}">${pl.name}</span>
-        <div class="rep-bar-container">
-          <div class="rep-bar" style="width:${pl.reputation}%;background:${repColor}"></div>
-        </div>
-        <span class="rep-val" style="color:${repColor}">${pl.reputation}</span>
-      `;
-      repGrid.appendChild(div);
-    }
-    section3.appendChild(repGrid);
-    content.appendChild(section3);
-
-    // Bind events
-    content.querySelectorAll('.btn-break-agr').forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (confirm('Break this agreement? This will cost reputation.')) {
-          this.gs.breakAgreementById(myId, btn.dataset.id);
-          this._openDiplomacyModal();
-          this._updateUI();
-          this._addLogEntry(this.gs.log[0]);
-        }
-      });
-    });
-
-    content.querySelectorAll('.btn-accept-prop').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const result = this.gs.acceptAgreement(btn.dataset.id, myId);
-        if (!result.ok) this._showStatus(result.reason);
-        this._openDiplomacyModal();
-        this._updateUI();
-        if (this.gs.log[0]) this._addLogEntry(this.gs.log[0]);
-      });
-    });
-
-    content.querySelectorAll('.btn-reject-prop').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this.gs.rejectProposal(btn.dataset.id, myId);
-        this._openDiplomacyModal();
-      });
-    });
-
-    const propSend = content.querySelector('#btn-propose-send');
-    if (propSend) {
-      propSend.addEventListener('click', () => {
-        const targetId = parseInt(content.querySelector('#prop-target').value);
-        const type     = content.querySelector('#prop-type').value;
-        const result   = this.gs.proposeAgreement(myId, targetId, type);
-        if (!result.ok) this._showStatus(result.reason);
-        else this._addLogEntry(this.gs.log[0]);
-        this._openDiplomacyModal();
+    const ai = this.aiPlayers[pidx];
+    if (ai) {
+      await ai.takeTurn(this.gs, (msg) => {
+        this._setStatus(msg);
         this._updateUI();
       });
     }
 
-    modal.classList.remove('hidden');
-  }
+    this.gs.endPlayerTurn();
 
-  // ── Victory Screen ────────────────────────────────────────
+    if (this.gs.checkVictory()) {
+      this.aiRunning = false;
+      this._showVictory();
+      return;
+    }
 
-  _showVictory() {
-    const v  = this.gs.victory;
-    const p  = this.gs.players[v.playerId];
-    document.getElementById('game-screen').classList.add('hidden');
-    const screen = document.getElementById('victory-screen');
-    screen.classList.remove('hidden');
-
-    document.getElementById('victory-title').textContent = `${p.name} Wins!`;
-    document.getElementById('victory-title').style.color = p.color.primary;
-    document.getElementById('victory-type').textContent  = v.desc;
-
-    // Build scoreboard
-    const scores = this.gs.players.map(pl => ({
-      pl,
-      score: this.gs.getPlayerTerritories(pl.id).length * 2 +
-             pl.resources.gold / 20 +
-             pl.techs.length * 3 +
-             (pl.isAlive ? 10 : 0),
-    })).sort((a, b) => b.score - a.score);
-
-    const board = document.getElementById('scoreboard');
-    board.innerHTML = scores.map((s, i) => `
-      <div class="score-row">
-        <span class="score-rank">${i+1}</span>
-        <span class="score-name" style="color:${s.pl.color.primary}">${s.pl.name}</span>
-        <span class="score-terr">${this.gs.getPlayerTerritories(s.pl.id).length} territories</span>
-        <span class="score-tech">${s.pl.techs.length} techs</span>
-        <span class="score-rep">Rep ${s.pl.reputation}</span>
-        <span class="score-val">${Math.round(s.score)} pts</span>
-      </div>
-    `).join('');
-
-    document.getElementById('btn-new-game').addEventListener('click', () => location.reload());
+    this.aiRunning = false;
+    this._afterTurn(pidx);
   }
 
   // ── UI Update ─────────────────────────────────────────────
@@ -585,141 +285,389 @@ class UIController {
     if (!this.gs) return;
     const pidx = this.gs.currentPIdx;
     const p    = this.gs.players[pidx];
-    if (!p) return;
 
-    // Phase / turn display
+    // Turn / Phase display
     document.getElementById('turn-display').textContent  = `Turn ${this.gs.turn} / ${CONFIG.MAX_TURNS}`;
     document.getElementById('phase-display').textContent = this.gs.phase;
 
-    const phaseBtn = document.getElementById('btn-end-phase');
-    const phaseLabels = { DIPLOMACY: 'End Diplomacy →', BUILD: 'End Build Phase →', MOVE: 'End Move Phase →' };
-    phaseBtn.textContent = phaseLabels[this.gs.phase] || 'Next Phase';
-
-    // Current player indicator
+    // Current player box
     document.getElementById('current-player-name').textContent = p.name;
     document.getElementById('current-player-name').style.color = p.color.primary;
-    document.getElementById('player-type-badge').textContent   = this.aiThinking ? '🤖 Thinking…' : (p.isAI ? '🤖 AI' : '👤 Human');
+    document.getElementById('player-type-badge').textContent   = p.isAI ? '🤖 AI' : '👤 Human';
 
     // Resources
     const res = p.resources;
-    const inc = this.gs.getIncome(pidx);
-    const upc = this.gs.getUpkeep(pidx);
-    document.getElementById('res-gold').innerHTML      = `💰 ${res.gold} <span class="inc">(+${inc.gold})</span>`;
-    document.getElementById('res-food').innerHTML      = `🌾 ${res.food} <span class="inc">(+${Math.max(0,inc.food - upc.food)})</span>`;
-    document.getElementById('res-iron').innerHTML      = `⚙ ${res.iron} <span class="inc">(+${inc.iron})</span>`;
-    document.getElementById('res-knowledge').innerHTML = `📚 ${res.knowledge} <span class="inc">(+${inc.knowledge})</span>`;
+    document.getElementById('res-funds').textContent   = `💰 Funds: ${res.funds || 0}`;
+    document.getElementById('res-media').textContent   = `📺 Media: ${res.media || 0}`;
+    document.getElementById('res-ground').textContent  = `🤝 Ground: ${res.ground || 0}`;
+    document.getElementById('res-capital').textContent = `🔮 Capital: ${res.capital || 0}`;
 
-    // Territory + unit counts
-    const myTerr  = this.gs.getPlayerTerritories(pidx).length;
-    const myUnits = this.gs.getPlayerUnits(pidx).length;
-    document.getElementById('stat-territories').textContent = myTerr;
-    document.getElementById('stat-units').textContent       = myUnits;
-    document.getElementById('stat-techs').textContent       = p.techs.length;
-    document.getElementById('stat-rep').textContent         = p.reputation;
+    // Stats
+    const myStates = Object.values(this.gs.territories).filter(t => t.owner === pidx);
+    const myOps    = Object.values(this.gs.territories).flatMap(t => t.ops.filter(op => op.owner === pidx));
+    document.getElementById('stat-ev').textContent          = `${this.gs.getEV(pidx)} / ${CONFIG.EV_WIN}`;
+    document.getElementById('stat-states').textContent      = myStates.length;
+    document.getElementById('stat-ops').textContent         = myOps.length;
+    document.getElementById('stat-policies').textContent    = p.policies.size;
+    document.getElementById('stat-rep').textContent         = `${p.reputation} / 100`;
+    document.getElementById('stat-exposure').textContent    = `${p.exposure} / ${CONFIG.SCANDAL_THRESHOLD}`;
 
-    // Phase-specific controls visibility
-    const isHuman = !p.isAI && !this.aiThinking;
-    document.getElementById('btn-diplomacy').style.display  = (isHuman && this.gs.phase === 'DIPLOMACY') ? '' : 'none';
-    document.getElementById('btn-build-unit').style.display = (isHuman && this.gs.phase === 'BUILD') ? '' : 'none';
-    document.getElementById('btn-fortify').style.display    = (isHuman && this.gs.phase === 'BUILD') ? '' : 'none';
-    document.getElementById('btn-tech').style.display       = (isHuman && this.gs.phase === 'BUILD') ? '' : 'none';
-    document.getElementById('btn-move-units').style.display = (isHuman && this.gs.phase === 'MOVE' && !this.awaitingMove) ? '' : 'none';
-    document.getElementById('btn-cancel-move').style.display= (isHuman && this.awaitingMove) ? '' : 'none';
-    phaseBtn.style.display = isHuman ? '' : 'none';
-
-    // Phase guide highlight
+    // Phase guide
     document.querySelectorAll('.phase-step').forEach(el => {
       el.classList.toggle('active', el.dataset.phase === this.gs.phase);
     });
 
-    // Player roster
-    this._updatePlayerRoster();
+    // Phase button text
+    const phases = ['DIPLOMACY', 'BUILD', 'MARCH'];
+    const idx    = phases.indexOf(this.gs.phase);
+    const nextPhase = idx < phases.length - 1 ? phases[idx + 1] : 'End Turn';
+    document.getElementById('btn-end-phase').textContent = `End ${this.gs.phase} →`;
+
+    // Action button states
+    const isHuman = !p.isAI;
+    const inDip   = this.gs.phase === 'DIPLOMACY';
+    const inBuild = this.gs.phase === 'BUILD';
+    const inMarch = this.gs.phase === 'MARCH';
+    document.getElementById('btn-diplomacy').disabled  = !isHuman || !inDip;
+    document.getElementById('btn-build-unit').disabled = !isHuman || !inBuild;
+    document.getElementById('btn-fortify').disabled    = !isHuman || !inBuild;
+    document.getElementById('btn-tech').disabled       = !isHuman || !inBuild;
+    document.getElementById('btn-move-units').disabled = !isHuman || !inMarch;
+
+    // Roster
+    this._updateRoster();
 
     // Event log
-    this._updateEventLog();
+    this._updateLog();
   }
 
-  _updatePlayerRoster() {
+  _updateRoster() {
     const roster = document.getElementById('player-roster');
-    roster.innerHTML = this.gs.players.map(pl => {
-      const terrCount = this.gs.getPlayerTerritories(pl.id).length;
-      const unitCount = this.gs.getPlayerUnits(pl.id).length;
-      const isCurrent = pl.id === this.gs.currentPIdx;
-      return `
-        <div class="roster-entry${isCurrent ? ' current' : ''}${!pl.isAlive ? ' eliminated' : ''}">
-          <div class="roster-dot" style="background:${pl.color.primary}"></div>
-          <div class="roster-name">${pl.name}</div>
-          <div class="roster-stats">
-            <span title="Territories">🗺 ${terrCount}</span>
-            <span title="Units">⚔ ${unitCount}</span>
-            <span title="Techs">📚 ${pl.techs.length}</span>
-          </div>
-          <div class="roster-rep" title="Reputation">Rep ${pl.reputation}</div>
-        </div>
+    roster.innerHTML = '';
+    for (const p of this.gs.players) {
+      const ev   = this.gs.getEV(p.id);
+      const card = document.createElement('div');
+      card.className = `roster-card ${p.id === this.gs.currentPIdx ? 'active' : ''} ${!p.alive ? 'eliminated' : ''}`;
+      card.style.setProperty('--faction-color', p.color.primary);
+      card.innerHTML = `
+        <div class="roster-name" style="color:${p.color.primary}">${p.name}</div>
+        <div class="roster-ev">${ev} EV</div>
+        <div class="roster-rep">Rep: ${p.reputation}</div>
+        ${p.exposure > 0 ? `<div class="roster-exposure">⚠ ${p.exposure} exposure</div>` : ''}
       `;
-    }).join('');
+      roster.appendChild(card);
+    }
   }
 
-  _updateTerritoryPanel(t) {
-    const panel    = document.getElementById('territory-panel');
-    const terrDef  = CONFIG.TERRAINS[t.terrain];
-    const owner    = t.owner !== null ? this.gs.players[t.owner] : null;
-    const resStr   = Object.entries(terrDef.resources).map(([k,v]) => `${v} ${k}`).join(', ') || 'None';
+  _updateLog() {
+    const logEl = document.getElementById('event-log');
+    logEl.innerHTML = this.gs.log.slice(0, 30).map(e =>
+      `<div class="log-entry"><span class="log-turn">T${e.turn}</span> <span class="log-src">${e.src}</span> ${e.msg}</div>`
+    ).join('');
+  }
 
-    const byOwner = {};
-    for (const u of t.units) {
-      if (!byOwner[u.owner]) byOwner[u.owner] = [];
-      byOwner[u.owner].push(u);
-    }
-    const unitStr = Object.entries(byOwner).map(([oid, units]) => {
-      const byType = {};
-      for (const u of units) byType[u.type] = (byType[u.type] || 0) + 1;
-      const pl = this.gs.players[parseInt(oid)];
-      return `<span style="color:${pl.color.mid}">${Object.entries(byType).map(([k,v]) => `${v}×${CONFIG.UNITS[k].name}`).join(', ')}</span>`;
-    }).join('<br>');
+  _showTerritoryPanel(abbr) {
+    const t      = this.gs.territories[abbr];
+    const stDef  = CONFIG.STATE_TYPES[t.lean];
+    const owner  = t.owner !== null ? this.gs.players[t.owner] : null;
+    const panel  = document.getElementById('territory-panel');
+
+    const byType = {};
+    for (const op of t.ops) byType[op.type] = (byType[op.type] || 0) + 1;
+    const opsStr = Object.entries(byType).map(([k, v]) => `${v}× ${CONFIG.OPERATIONS[k].name}`).join('<br>') || 'None';
+    const inc    = stDef.income;
 
     panel.innerHTML = `
-      <div class="panel-terr-name">${terrDef.symbol} ${terrDef.name}</div>
-      <div class="panel-row">Owner: <b style="color:${owner ? owner.color.primary : '#aaa'}">${owner ? owner.name : 'Neutral'}</b></div>
-      <div class="panel-row">Income: ${resStr}</div>
-      <div class="panel-row">Defense: +${terrDef.defBonus}${t.fortification > 0 ? ` + ${t.fortification*2} (fort)` : ''}</div>
-      <div class="panel-row">Fortification: ${'◈'.repeat(t.fortification) || 'None'}</div>
-      ${unitStr ? `<div class="panel-row units-row">Units:<br>${unitStr}</div>` : '<div class="panel-row">Units: None</div>'}
+      <div class="territory-header" style="border-color:${owner ? owner.color.primary : '#555'}">
+        <div class="terr-name">${t.name} (${t.abbr})</div>
+        <div class="terr-ev">${t.ev} Electoral Votes</div>
+        <div class="terr-lean" style="color:${stDef.border}">${stDef.name}</div>
+        <div class="terr-owner" style="color:${owner ? owner.color.primary : '#888'}">
+          ${owner ? `Controlled by: ${owner.name}` : '⬜ Neutral'}
+        </div>
+      </div>
+      <div class="terr-details">
+        <div class="terr-row"><span>Defense</span><span>${stDef.defBonus + t.entrenched * 2}${t.entrenched > 0 ? ` (+${t.entrenched * 2} entrenched)` : ''}</span></div>
+        <div class="terr-row"><span>Entrench</span><span>${'◈'.repeat(t.entrenched) || '—'}</span></div>
+        <div class="terr-row"><span>Income</span><span>💰${inc.funds} 📺${inc.media} 🤝${inc.ground} 🔮${inc.capital}</span></div>
+      </div>
+      <div class="terr-ops-title">Operations Present</div>
+      <div class="terr-ops">${opsStr}</div>
     `;
   }
 
-  _updateEventLog() {
-    const log = document.getElementById('event-log');
-    const typeColors = {
-      'system': '#60a5fa', 'build': '#34d399', 'combat-win': '#f87171',
-      'combat-loss': '#fb923c', 'capture': '#a78bfa', 'tech': '#818cf8',
-      'diplomacy': '#f0c040', 'betrayal': '#ef4444', 'warning': '#fbbf24',
-      'elimination': '#f43f5e', 'info': '#94a3b8',
-    };
-    log.innerHTML = this.gs.log.slice(0, 20).map(entry => {
-      const color = typeColors[entry.type] || '#94a3b8';
-      return `<div class="log-entry" style="border-left-color:${color}">
-        <span class="log-turn">T${entry.turn}</span>
-        <span class="log-msg">${entry.msg}</span>
-      </div>`;
-    }).join('');
+  // ── Modals ────────────────────────────────────────────────
+
+  _openDeploy() {
+    if (this.gs.phase !== 'BUILD') return;
+    const pidx    = this.gs.currentPIdx;
+    const p       = this.gs.players[pidx];
+    const myStates = Object.values(this.gs.territories).filter(t => t.owner === pidx);
+    const content = document.getElementById('build-content');
+
+    if (myStates.length === 0) {
+      content.innerHTML = '<p class="modal-empty">You control no states. Cannot deploy.</p>';
+    } else {
+      content.innerHTML = `
+        <div class="build-top">
+          <label class="build-label">Deploy in State:</label>
+          <select id="build-state-select" class="build-select">
+            ${myStates.map(t => `<option value="${t.abbr}">${t.name} (${t.abbr})</option>`).join('')}
+          </select>
+        </div>
+        <div class="unit-grid">
+          ${Object.entries(CONFIG.OPERATIONS).map(([key, def]) => {
+            const chk = this.gs.canDeploy(pidx, myStates[0].abbr, key);
+            return `
+              <div class="unit-card ${chk.ok ? '' : 'disabled'}" data-op="${key}">
+                <div class="unit-icon">${def.icon}</div>
+                <div class="unit-name">${def.name}</div>
+                <div class="unit-stats">Atk ${def.attack} | Def ${def.defense} | Mv ${def.move}</div>
+                <div class="unit-cost">${Object.entries(def.cost).map(([r,v]) => `${v} ${r}`).join(', ')}</div>
+                <div class="unit-desc">${def.desc}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+
+      content.querySelectorAll('.unit-card:not(.disabled)').forEach(card => {
+        card.addEventListener('click', () => {
+          const opType = card.dataset.op;
+          const stateAbbr = document.getElementById('build-state-select').value;
+          const result = this.gs.deployOp(pidx, stateAbbr, opType);
+          if (result.ok) {
+            this._closeModals();
+            this._updateUI();
+          } else {
+            this._setStatus(result.reason || 'Cannot deploy.');
+          }
+        });
+      });
+    }
+
+    this._openModal('build-modal');
   }
 
-  _addLogEntry(entry) {
-    if (!entry) return;
-    this._updateEventLog();
+  _openResearch() {
+    if (this.gs.phase !== 'BUILD') return;
+    const pidx    = this.gs.currentPIdx;
+    const p       = this.gs.players[pidx];
+    const content = document.getElementById('tech-content');
+
+    const branches = ['Digital', 'Populist', 'Dark Arts', 'Coalition'];
+    content.innerHTML = branches.map(branch => {
+      const policies = Object.entries(CONFIG.POLICIES).filter(([, v]) => v.branch === branch);
+      return `
+        <div class="tech-branch">
+          <div class="tech-branch-title">${branch}</div>
+          ${policies.map(([key, def]) => {
+            const has = p.policies.has(key);
+            const chk = this.gs.canResearch(pidx, key);
+            return `
+              <div class="tech-card ${has ? 'researched' : chk.ok ? '' : 'locked'}" data-key="${key}">
+                <span class="tech-icon">${def.icon}</span>
+                <div class="tech-info">
+                  <div class="tech-name">${def.name}</div>
+                  <div class="tech-effect">${def.effect}</div>
+                  <div class="tech-cost">${Object.entries(def.cost).map(([r,v]) => `${v} ${r}`).join(', ')}</div>
+                  ${!chk.ok && !has ? `<div class="tech-reason">${chk.reason}</div>` : ''}
+                </div>
+                ${has ? '<span class="tech-check">✓</span>' : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }).join('');
+
+    content.querySelectorAll('.tech-card:not(.researched):not(.locked)').forEach(card => {
+      card.addEventListener('click', () => {
+        const result = this.gs.researchPolicy(pidx, card.dataset.key);
+        if (result.ok) {
+          this._closeModals();
+          this._updateUI();
+        } else {
+          this._setStatus(result.reason || 'Cannot research.');
+        }
+      });
+    });
+
+    this._openModal('tech-modal');
+  }
+
+  _openDiplomacy() {
+    if (this.gs.phase !== 'DIPLOMACY') return;
+    const pidx    = this.gs.currentPIdx;
+    const content = document.getElementById('diplomacy-content');
+
+    const coalitions = this.gs.getActiveCoalitions(pidx);
+    const pending    = this.gs.getPendingCoalitions(pidx);
+    const others     = this.gs.players.filter(p => p.id !== pidx && p.alive);
+
+    content.innerHTML = `
+      <div class="diplo-section">
+        <h3 class="diplo-title">Active Coalitions</h3>
+        ${coalitions.length === 0 ? '<p class="diplo-empty">No active coalitions.</p>' : ''}
+        ${coalitions.map(c => {
+          const partnerId = c.p1 === pidx ? c.p2 : c.p1;
+          const partner   = this.gs.players[partnerId];
+          const idx       = this.gs.coalitions.indexOf(c);
+          return `
+            <div class="coalition-row" style="border-color:${partner.color.primary}33">
+              <div class="coalition-info">
+                <span style="color:${partner.color.primary}">${partner.name}</span>
+                — ${CONFIG.COALITION_TYPES[c.type].name}
+                ${c.duration > 0 ? `(${c.duration - (this.gs.turn - c.turnMade)} turns left)` : '(indefinite)'}
+              </div>
+              <button class="btn-break-coalition" data-idx="${idx}">Break ⚡</button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div class="diplo-section">
+        <h3 class="diplo-title">Pending Proposals</h3>
+        ${pending.length === 0 ? '<p class="diplo-empty">No incoming proposals.</p>' : ''}
+        ${pending.map(({ coalition: c, idx }) => {
+          const partner = this.gs.players[c.p1];
+          return `
+            <div class="coalition-row">
+              <div class="coalition-info">
+                <span style="color:${partner.color.primary}">${partner.name}</span>
+                offers: ${CONFIG.COALITION_TYPES[c.type].name}
+              </div>
+              <button class="btn-accept-coalition" data-idx="${idx}">Accept</button>
+              <button class="btn-reject-coalition" data-idx="${idx}">Reject</button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div class="diplo-section">
+        <h3 class="diplo-title">Propose Coalition</h3>
+        <div class="diplo-propose-grid">
+          ${others.map(other => `
+            <div class="diplo-player-card" style="border-color:${other.color.primary}55">
+              <div class="diplo-player-name" style="color:${other.color.primary}">${other.name}</div>
+              <div class="diplo-player-ev">${this.gs.getEV(other.id)} EV</div>
+              <div class="diplo-btns">
+                ${Object.keys(CONFIG.COALITION_TYPES).map(type => `
+                  <button class="btn-propose" data-target="${other.id}" data-type="${type}">${CONFIG.COALITION_TYPES[type].name}</button>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+
+    content.querySelectorAll('.btn-break-coalition').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.gs.breakCoalition(parseInt(btn.dataset.idx), pidx);
+        this._openDiplomacy();
+        this._updateUI();
+      });
+    });
+
+    content.querySelectorAll('.btn-accept-coalition').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.gs.acceptCoalition(parseInt(btn.dataset.idx));
+        this._openDiplomacy();
+        this._updateUI();
+      });
+    });
+
+    content.querySelectorAll('.btn-reject-coalition').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const c = this.gs.coalitions[parseInt(btn.dataset.idx)];
+        if (c) c.pending = false;
+        this._openDiplomacy();
+      });
+    });
+
+    content.querySelectorAll('.btn-propose').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const result = this.gs.proposeCoalition(btn.dataset.type, pidx, parseInt(btn.dataset.target));
+        if (result.ok) {
+          this._closeModals();
+          this._updateUI();
+        } else {
+          this._setStatus(result.reason || 'Cannot propose.');
+        }
+      });
+    });
+
+    this._openModal('diplomacy-modal');
+  }
+
+  _doEntrench() {
+    if (this.gs.phase !== 'BUILD') return;
+    const pidx = this.gs.currentPIdx;
+    const sel  = this.renderer.selected;
+    if (!sel || this.gs.territories[sel]?.owner !== pidx) {
+      this._setStatus('Select one of your states first, then click Entrench.');
+      return;
+    }
+    const result = this.gs.entrenchState(pidx, sel);
+    if (!result.ok) this._setStatus(result.reason);
+    this._updateUI();
+  }
+
+  _openModal(id) {
+    document.getElementById('modal-overlay').classList.remove('hidden');
+    document.getElementById(id).classList.remove('hidden');
   }
 
   _closeModals() {
+    document.getElementById('modal-overlay').classList.add('hidden');
     document.querySelectorAll('.game-modal').forEach(m => m.classList.add('hidden'));
   }
 
-  _showStatus(msg) {
-    const el = document.getElementById('status-message');
-    el.textContent = msg;
-    setTimeout(() => { el.textContent = ''; }, 3000);
+  _setStatus(msg) {
+    document.getElementById('status-message').textContent = msg;
+  }
+
+  _showCombatToast(msg) {
+    const toast = document.getElementById('combat-toast');
+    toast.textContent = msg;
+    toast.classList.remove('hidden');
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => toast.classList.add('hidden'), 3000);
+  }
+
+  // ── Victory Screen ────────────────────────────────────────
+
+  _showVictory() {
+    const winner = this.gs.players[this.gs.winner];
+    document.getElementById('victory-title').textContent = `${winner.name} Wins!`;
+    document.getElementById('victory-title').style.color = winner.color.primary;
+    document.getElementById('victory-type').textContent  = this.gs.winType;
+
+    const board = document.getElementById('scoreboard');
+    const sorted = [...this.gs.players].sort((a, b) => this.gs.getScore(b.id) - this.gs.getScore(a.id));
+    board.innerHTML = sorted.map((p, i) => `
+      <div class="score-row ${p.id === this.gs.winner ? 'winner' : ''} ${!p.alive ? 'eliminated' : ''}">
+        <span class="score-rank">${i + 1}</span>
+        <span class="score-name" style="color:${p.color.primary}">${p.name}</span>
+        <span class="score-ev">${this.gs.getEV(p.id)} EV</span>
+        <span class="score-val">${this.gs.getScore(p.id)} pts</span>
+      </div>
+    `).join('');
+
+    document.getElementById('game-screen').classList.add('hidden');
+    document.getElementById('victory-screen').classList.remove('hidden');
+  }
+
+  // ── RAF Loop ──────────────────────────────────────────────
+
+  _loop() {
+    if (this.renderer) this.renderer.draw();
+    requestAnimationFrame(() => this._loop());
   }
 }
 
 // Boot
-window.addEventListener('DOMContentLoaded', () => { window.gameUI = new UIController(); });
+window.addEventListener('DOMContentLoaded', () => {
+  window.ui = new UIController();
+});
